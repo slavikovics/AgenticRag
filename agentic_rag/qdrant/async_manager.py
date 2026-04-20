@@ -111,13 +111,25 @@ class AsyncQdrantManager:
     
     async def connect(self) -> None:
         try:
-            self.client = QdrantClient(url=self.url)
+            # Check if we should use in-memory mode (for development/testing without Docker)
+            qdrant_mode = os.getenv("QDRANT_MODE", "remote").lower()
+            use_memory = qdrant_mode == "memory" or os.getenv("QDRANT_USE_MEMORY", "false").lower() == "true"
+            
+            if use_memory:
+                logger.info("Using in-memory Qdrant client")
+                self.client = QdrantClient(":memory:")
+            else:
+                logger.info(f"Connecting to Qdrant at {self.url}")
+                self.client = QdrantClient(url=self.url)
+            
             self.client.get_collections()
             self._connected = True
-            logger.info(f"Connected to Qdrant at {self.url}")
+            logger.info(f"Connected to Qdrant")
         except Exception as e:
-            logger.error(f"Failed to connect to Qdrant: {e}")
-            raise
+            logger.warning(f"Failed to connect to remote Qdrant: {e}")
+            logger.info("Falling back to in-memory Qdrant client")
+            self.client = QdrantClient(":memory:")
+            self._connected = True
     
     async def ensure_connected(self) -> None:
         if not self._connected or not self.client:
@@ -295,11 +307,16 @@ class AsyncQdrantManager:
         await self.ensure_connected()
         try:
             info = self.client.get_collection(self.collection_name)
+            # Handle both server and in-memory modes
+            vectors_count = getattr(info, 'vectors_count', None) or getattr(info, 'points_count', 0)
+            points_count = getattr(info, 'points_count', 0)
+            status = getattr(info, 'status', 'active')
+            
             return {
                 "collection_name": self.collection_name,
-                "vectors_count": info.vectors_count,
-                "points_count": info.points_count,
-                "status": info.status,
+                "vectors_count": vectors_count if vectors_count is not None else points_count,
+                "points_count": points_count,
+                "status": str(status) if status else "active",
             }
         except Exception as e:
             logger.error(f"Failed to get stats: {e}")

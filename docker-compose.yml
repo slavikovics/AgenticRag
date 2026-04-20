@@ -1,5 +1,5 @@
 services:
-  # Qdrant Vector Database
+  # Qdrant Vector Database (optional - can use in-memory mode)
   qdrant:
     image: qdrant/qdrant:v1.13.3
     container_name: qdrant
@@ -25,8 +25,9 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENROUTER_LLM_MODEL=${OPENROUTER_LLM_MODEL:-openai/gpt-4-turbo-preview}
       - OPENROUTER_EMBEDDING_MODEL=${OPENROUTER_EMBEDDING_MODEL:-openai/text-embedding-3-small}
-      - QDRANT_URL=http://qdrant:6333
-      - QDRANT_COLLECTION_NAME=documents
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - QDRANT_COLLECTION_NAME=${QDRANT_COLLECTION_NAME:-documents}
+      - QDRANT_MODE=${QDRANT_MODE:-remote}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - MAX_ITERATIONS=${MAX_ITERATIONS:-10}
       - TEMPERATURE=${TEMPERATURE:-0.7}
