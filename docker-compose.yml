@@ -22,12 +22,16 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # OpenRouter API Key - REQUIRED (set this in your .env file)
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      # Optional model configurations with defaults
       - OPENROUTER_LLM_MODEL=${OPENROUTER_LLM_MODEL:-openai/gpt-4-turbo-preview}
       - OPENROUTER_EMBEDDING_MODEL=${OPENROUTER_EMBEDDING_MODEL:-openai/text-embedding-3-small}
+      # Qdrant configuration
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - QDRANT_COLLECTION_NAME=${QDRANT_COLLECTION_NAME:-documents}
       - QDRANT_MODE=${QDRANT_MODE:-remote}
+      # Application settings
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - MAX_ITERATIONS=${MAX_ITERATIONS:-10}
       - TEMPERATURE=${TEMPERATURE:-0.7}

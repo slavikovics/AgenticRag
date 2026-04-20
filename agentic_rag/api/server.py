@@ -121,10 +121,13 @@ async def get_qdrant_manager():
     """Lazy load Qdrant manager."""
     global _qdrant_manager
     if _qdrant_manager is None:
+        # Get API key from settings (which reads from environment)
+        api_key = settings.openrouter_api_key
         _qdrant_manager = AsyncQdrantManager(
             url=settings.qdrant_url,
             collection_name=settings.qdrant_collection_name,
             embedding_model=settings.openrouter_embedding_model,
+            api_key=api_key,
         )
         await _qdrant_manager.connect()
         await _qdrant_manager.create_collection()

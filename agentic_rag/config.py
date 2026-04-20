@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     qdrant_collection_name: str = Field(default="documents")
     
     # OpenRouter settings (for both LLM and embeddings)
-    openrouter_api_key: str = Field(...)
+    openrouter_api_key: str = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
     openrouter_llm_model: str = Field(default="openai/gpt-4-turbo-preview")
     openrouter_embedding_model: str = Field(default="openai/text-embedding-3-small")
