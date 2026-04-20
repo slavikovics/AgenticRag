@@ -27,6 +27,8 @@ class AsyncOpenRouterEmbedding:
     """Async generate embeddings using OpenRouter API."""
     
     def __init__(self, api_key: str, model: str = "openai/text-embedding-3-small"):
+        if not api_key:
+            raise ValueError("OpenRouter API key is required for embeddings")
         self.api_key = api_key
         self.model = model
         self.base_url = "https://openrouter.ai/api/v1"
@@ -47,6 +49,8 @@ class AsyncOpenRouterEmbedding:
             "Content-Type": "application/json",
         }
         
+        logger.debug(f"Requesting embedding for text length: {len(text)}")
+        
         async with self.session.post(
             f"{self.base_url}/embeddings",
             json=payload,
@@ -55,6 +59,8 @@ class AsyncOpenRouterEmbedding:
         ) as response:
             if response.status != 200:
                 error_text = await response.text()
+                logger.error(f"Embedding API error {response.status}: {error_text}")
+                logger.error(f"Headers sent: Authorization={'Bearer ' + self.api_key[:5] + '...' if self.api_key else 'MISSING'}")
                 raise RuntimeError(f"Embedding API error {response.status}: {error_text}")
             result = await response.json()
             return result["data"][0]["embedding"]
@@ -70,6 +76,8 @@ class AsyncOpenRouterEmbedding:
             "Content-Type": "application/json",
         }
         
+        logger.debug(f"Requesting embeddings for {len(texts)} texts")
+        
         async with self.session.post(
             f"{self.base_url}/embeddings",
             json=payload,
@@ -78,6 +86,8 @@ class AsyncOpenRouterEmbedding:
         ) as response:
             if response.status != 200:
                 error_text = await response.text()
+                logger.error(f"Embedding API error {response.status}: {error_text}")
+                logger.error(f"Headers sent: Authorization={'Bearer ' + self.api_key[:5] + '...' if self.api_key else 'MISSING'}")
                 raise RuntimeError(f"Embedding API error {response.status}: {error_text}")
             result = await response.json()
             return [item["embedding"] for item in result["data"]]
@@ -96,6 +106,7 @@ class AsyncQdrantManager:
         url: str = "http://localhost:6333",
         collection_name: str = "documents",
         embedding_model: str = "openai/text-embedding-3-small",
+        api_key: Optional[str] = None,
     ):
         self.url = url
         self.collection_name = collection_name
@@ -105,8 +116,12 @@ class AsyncQdrantManager:
         self._embedder: Optional[AsyncOpenRouterEmbedding] = None
         self._embedding_dim = 1536
         
-        openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-        if openrouter_api_key:
+        # Use provided api_key or get from environment
+        openrouter_api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        if not openrouter_api_key:
+            logger.error("OPENROUTER_API_KEY not set. Embeddings will fail. Set it in .env file or pass it directly.")
+        else:
+            logger.info(f"Initializing OpenRouter embedder with key: {openrouter_api_key[:5]}...")
             self._embedder = AsyncOpenRouterEmbedding(openrouter_api_key, embedding_model)
     
     async def connect(self) -> None:
