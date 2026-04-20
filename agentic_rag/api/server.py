@@ -3,24 +3,26 @@ Complete FastAPI server for Agentic RAG system.
 Uses Qdrant vector database with OpenRouter for embeddings and LLM.
 """
 
-import os
 import asyncio
+import json
 import logging
+import os
 import tempfile
 from contextlib import asynccontextmanager
-from typing import Optional, List
-from fastapi import FastAPI, HTTPException, WebSocket, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from typing import List, Optional
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import json
+
+from agentic_rag.agents.base_agent import AgentConfig, AgenticRAG
+from agentic_rag.config import settings
 
 # Import custom modules
 from agentic_rag.llm.openrouter_client import OpenRouterClient, OpenRouterConfig
 from agentic_rag.qdrant.async_manager import AsyncQdrantManager
-from agentic_rag.agents.base_agent import AgenticRAG, AgentConfig
-from agentic_rag.config import settings
-from agentic_rag.utils.file_parser import process_file_to_documents, chunk_text
+from agentic_rag.utils.file_parser import chunk_text, process_file_to_documents
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -30,8 +32,10 @@ logging.basicConfig(level=logging.INFO)
 # Pydantic Models
 # ============================================================================
 
+
 class QueryRequest(BaseModel):
     """Request body for RAG query."""
+
     query: str
     model: Optional[str] = None
     temperature: Optional[float] = 0.7
@@ -41,6 +45,7 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     """Response body for RAG query."""
+
     query: str
     answer: str
     sources: Optional[list[dict]] = None
@@ -50,6 +55,7 @@ class QueryResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     """Request for knowledge base search."""
+
     query: str
     limit: Optional[int] = 10
     alpha: Optional[float] = 0.5
@@ -57,6 +63,7 @@ class SearchRequest(BaseModel):
 
 class SearchResult(BaseModel):
     """Single search result."""
+
     content: str
     source: str
     chunk_id: int
@@ -65,6 +72,7 @@ class SearchResult(BaseModel):
 
 class SearchResponse(BaseModel):
     """Response for search."""
+
     query: str
     results: list[SearchResult]
     count: int
@@ -72,6 +80,7 @@ class SearchResponse(BaseModel):
 
 class FileUploadResponse(BaseModel):
     """Response for file upload."""
+
     status: str
     filename: str
     documents_indexed: int
@@ -80,6 +89,7 @@ class FileUploadResponse(BaseModel):
 
 class FilesUploadResponse(BaseModel):
     """Response for multiple files upload."""
+
     status: str
     files_processed: int
     total_documents_indexed: int
@@ -88,6 +98,7 @@ class FilesUploadResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Health check response."""
+
     status: str
     qdrant: dict
     llm_client: str = "openrouter"
@@ -160,19 +171,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Startup failed: {e}")
         raise
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down...")
     global _qdrant_manager, _llm_client, _agent
-    
+
     if _qdrant_manager:
         await _qdrant_manager.close()
-    
+
     if _llm_client:
         await _llm_client.close()
-    
+
     _agent = None
     logger.info("Shutdown complete")
 
@@ -201,17 +212,18 @@ app.add_middleware(
 # Health & Status Endpoints
 # ============================================================================
 
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Check system health."""
     try:
         qdrant = await get_qdrant_manager()
         llm = await get_llm_client()
-        
+
         stats = {}
         if qdrant:
             stats = await qdrant.get_stats()
-        
+
         return HealthResponse(
             status="healthy",
             qdrant=stats,
@@ -238,18 +250,19 @@ async def get_stats():
 # Retrieval Endpoints
 # ============================================================================
 
+
 @app.post("/search", response_model=SearchResponse)
 async def search_knowledge_base(request: SearchRequest):
     """Search the knowledge base."""
     try:
         retriever = await get_qdrant_manager()
-        
+
         results = await retriever.hybrid_search(
             query=request.query,
             limit=request.limit,
             alpha=request.alpha,
         )
-        
+
         formatted = [
             SearchResult(
                 content=r["content"],
@@ -259,13 +272,13 @@ async def search_knowledge_base(request: SearchRequest):
             )
             for r in results
         ]
-        
+
         return SearchResponse(
             query=request.query,
             results=formatted,
             count=len(formatted),
         )
-    
+
     except Exception as e:
         logger.error(f"Search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -274,6 +287,7 @@ async def search_knowledge_base(request: SearchRequest):
 # ============================================================================
 # Agentic RAG Endpoints
 # ============================================================================
+
 
 @app.post("/query", response_model=QueryResponse)
 async def agentic_query(request: QueryRequest):
@@ -284,13 +298,13 @@ async def agentic_query(request: QueryRequest):
             temperature=request.temperature,
         )
         agent.config.max_iterations = request.max_iterations
-        
+
         answer = await agent.run(request.query)
         sources = agent.get_sources()
-        
+
         llm = await get_llm_client()
         cost = getattr(llm, "total_cost", None)
-        
+
         return QueryResponse(
             query=request.query,
             answer=answer,
@@ -298,11 +312,11 @@ async def agentic_query(request: QueryRequest):
             iterations=agent.config.max_iterations,
             cost_usd=cost,
         )
-    
+
     except asyncio.TimeoutError:
         logger.error("Agent query timeout")
         raise HTTPException(status_code=504, detail="Agent processing timeout")
-    
+
     except Exception as e:
         logger.error(f"Query failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -312,48 +326,58 @@ async def agentic_query(request: QueryRequest):
 async def websocket_query(websocket: WebSocket):
     """WebSocket endpoint for streaming agent responses."""
     await websocket.accept()
-    
+
     try:
         while True:
             msg = await websocket.receive_text()
             data = json.loads(msg)
-            
+
             if data.get("type") != "query":
-                await websocket.send_json({
-                    "type": "error",
-                    "content": "Invalid message type",
-                })
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "content": "Invalid message type",
+                    }
+                )
                 continue
-            
+
             query = data.get("payload", {}).get("query")
             if not query:
-                await websocket.send_json({
-                    "type": "error",
-                    "content": "Missing query",
-                })
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "content": "Missing query",
+                    }
+                )
                 continue
-            
+
             agent = await get_agent()
-            
-            await websocket.send_json({
-                "type": "thinking",
-                "content": f"Processing query: {query}",
-            })
-            
+
+            await websocket.send_json(
+                {
+                    "type": "thinking",
+                    "content": f"Processing query: {query}",
+                }
+            )
+
             answer = await agent.run(query)
-            
-            await websocket.send_json({
-                "type": "answer",
-                "content": answer,
-            })
-    
+
+            await websocket.send_json(
+                {
+                    "type": "answer",
+                    "content": answer,
+                }
+            )
+
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         try:
-            await websocket.send_json({
-                "type": "error",
-                "content": str(e),
-            })
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "content": str(e),
+                }
+            )
         except:
             pass
 
@@ -362,18 +386,19 @@ async def websocket_query(websocket: WebSocket):
 # Document Management Endpoints
 # ============================================================================
 
+
 @app.post("/documents/index")
 async def index_documents(documents: list[dict]):
     """Index documents into Qdrant."""
     try:
         retriever = await get_qdrant_manager()
         count = await retriever.upsert_documents(documents)
-        
+
         return {
             "status": "success",
             "documents_indexed": count,
         }
-    
+
     except Exception as e:
         logger.error(f"Indexing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -385,12 +410,12 @@ async def delete_documents(source: str):
     try:
         retriever = await get_qdrant_manager()
         count = await retriever.delete_by_source(source)
-        
+
         return {
             "status": "success",
             "documents_deleted": count,
         }
-    
+
     except Exception as e:
         logger.error(f"Deletion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -399,6 +424,7 @@ async def delete_documents(source: str):
 # ============================================================================
 # File Upload Endpoints
 # ============================================================================
+
 
 @app.post("/files/upload", response_model=FileUploadResponse)
 async def upload_file(
@@ -409,21 +435,29 @@ async def upload_file(
     """Upload and index a single file."""
     try:
         # Validate file type
-        allowed_extensions = {'.txt', '.text', '.md', '.markdown', '.pdf', '.csv', '.json'}
+        allowed_extensions = {
+            ".txt",
+            ".text",
+            ".md",
+            ".markdown",
+            ".pdf",
+            ".csv",
+            ".json",
+        }
         file_ext = os.path.splitext(file.filename)[1].lower()
-        
+
         if file_ext not in allowed_extensions:
             raise HTTPException(
                 status_code=400,
                 detail=f"File type {file_ext} not supported. Allowed: {allowed_extensions}",
             )
-        
+
         # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
             content = await file.read()
             tmp_file.write(content)
             tmp_path = tmp_file.name
-        
+
         try:
             # Process file into documents
             documents = process_file_to_documents(
@@ -432,11 +466,11 @@ async def upload_file(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
             )
-            
+
             # Index documents
             retriever = await get_qdrant_manager()
             count = await retriever.upsert_documents(documents)
-            
+
             return FileUploadResponse(
                 status="success",
                 filename=file.filename,
@@ -447,7 +481,7 @@ async def upload_file(
             # Clean up temp file
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -463,30 +497,42 @@ async def upload_files_batch(
 ):
     """Upload and index multiple files at once."""
     try:
-        allowed_extensions = {'.txt', '.text', '.md', '.markdown', '.pdf', '.csv', '.json'}
-        
+        allowed_extensions = {
+            ".txt",
+            ".text",
+            ".md",
+            ".markdown",
+            ".pdf",
+            ".csv",
+            ".json",
+        }
+
         details = []
         total_documents = 0
         files_processed = 0
-        
+
         for file in files:
             file_ext = os.path.splitext(file.filename)[1].lower()
-            
+
             if file_ext not in allowed_extensions:
-                details.append({
-                    "filename": file.filename,
-                    "status": "skipped",
-                    "reason": f"Unsupported file type: {file_ext}",
-                })
+                details.append(
+                    {
+                        "filename": file.filename,
+                        "status": "skipped",
+                        "reason": f"Unsupported file type: {file_ext}",
+                    }
+                )
                 continue
-            
+
             try:
                 # Save uploaded file temporarily
-                with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+                with tempfile.NamedTemporaryFile(
+                    delete=False, suffix=file_ext
+                ) as tmp_file:
                     content = await file.read()
                     tmp_file.write(content)
                     tmp_path = tmp_file.name
-                
+
                 try:
                     # Process file into documents
                     documents = process_file_to_documents(
@@ -495,18 +541,20 @@ async def upload_files_batch(
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap,
                     )
-                    
+
                     # Index documents
                     retriever = await get_qdrant_manager()
                     count = await retriever.upsert_documents(documents)
-                    
-                    details.append({
-                        "filename": file.filename,
-                        "status": "success",
-                        "documents_indexed": count,
-                        "chunks": len(documents),
-                    })
-                    
+
+                    details.append(
+                        {
+                            "filename": file.filename,
+                            "status": "success",
+                            "documents_indexed": count,
+                            "chunks": len(documents),
+                        }
+                    )
+
                     total_documents += count
                     files_processed += 1
                 finally:
@@ -515,19 +563,21 @@ async def upload_files_batch(
                         os.unlink(tmp_path)
             except Exception as e:
                 logger.error(f"Failed to process file {file.filename}: {e}")
-                details.append({
-                    "filename": file.filename,
-                    "status": "failed",
-                    "error": str(e),
-                })
-        
+                details.append(
+                    {
+                        "filename": file.filename,
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                )
+
         return FilesUploadResponse(
             status="completed",
             files_processed=files_processed,
             total_documents_indexed=total_documents,
             details=details,
         )
-    
+
     except Exception as e:
         logger.error(f"Batch upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -539,13 +589,13 @@ async def delete_file(filename: str):
     try:
         retriever = await get_qdrant_manager()
         count = await retriever.delete_by_source(filename)
-        
+
         return {
             "status": "success",
             "filename": filename,
             "documents_deleted": count,
         }
-    
+
     except Exception as e:
         logger.error(f"File deletion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -554,6 +604,7 @@ async def delete_file(filename: str):
 # ============================================================================
 # Root Endpoint
 # ============================================================================
+
 
 @app.get("/")
 async def root():
@@ -582,10 +633,5 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info",
-    )
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)

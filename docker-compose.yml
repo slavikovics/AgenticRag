@@ -25,18 +25,20 @@ services:
       # OpenRouter API Key - REQUIRED (set this in your .env file)
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       # Optional model configurations with defaults
-      - OPENROUTER_LLM_MODEL=${OPENROUTER_LLM_MODEL:-openai/gpt-4-turbo-preview}
-      - OPENROUTER_EMBEDDING_MODEL=${OPENROUTER_EMBEDDING_MODEL:-openai/text-embedding-3-small}
+      - OPENROUTER_LLM_MODEL=${OPENROUTER_LLM_MODEL}
+      - OPENROUTER_EMBEDDING_MODEL=${OPENROUTER_EMBEDDING_MODEL}
       # Qdrant configuration
-      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
-      - QDRANT_COLLECTION_NAME=${QDRANT_COLLECTION_NAME:-documents}
-      - QDRANT_MODE=${QDRANT_MODE:-remote}
+      - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_COLLECTION_NAME=${QDRANT_COLLECTION_NAME}
+      - QDRANT_MODE=${QDRANT_MODE}
       # Application settings
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - MAX_ITERATIONS=${MAX_ITERATIONS:-10}
-      - TEMPERATURE=${TEMPERATURE:-0.7}
-      - MAX_TOKENS=${MAX_TOKENS:-2048}
-      - MEMORY_SIZE=${MEMORY_SIZE:-20}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - MAX_ITERATIONS=${MAX_ITERATIONS}
+      - TEMPERATURE=${TEMPERATURE}
+      - MAX_TOKENS=${MAX_TOKENS}
+      - MEMORY_SIZE=${MEMORY_SIZE}
+    env_file:
+      - .env
     networks:
       - agentic-rag
     restart: unless-stopped

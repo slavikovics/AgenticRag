@@ -3,21 +3,22 @@ Async Qdrant vector database manager.
 Uses OpenRouter for embeddings.
 """
 
-import os
 import asyncio
 import logging
-from typing import Optional, Any, Dict, List
+import os
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 import aiohttp
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import (
     Distance,
-    VectorParams,
-    PointStruct,
-    Filter,
     FieldCondition,
+    Filter,
     MatchValue,
     PayloadSchemaType,
+    PointStruct,
+    VectorParams,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 class AsyncOpenRouterEmbedding:
     """Async generate embeddings using OpenRouter API."""
-    
+
     def __init__(self, api_key: str, model: str = "openai/text-embedding-3-small"):
         if not api_key:
             raise ValueError("OpenRouter API key is required for embeddings")
@@ -33,14 +34,14 @@ class AsyncOpenRouterEmbedding:
         self.model = model
         self.base_url = "https://openrouter.ai/api/v1"
         self.session: Optional[aiohttp.ClientSession] = None
-    
+
     async def _ensure_session(self):
         if not self.session:
             self.session = aiohttp.ClientSession()
-    
+
     async def embed_text(self, text: str) -> List[float]:
         await self._ensure_session()
-        
+
         payload = {"model": self.model, "input": [text]}
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -48,9 +49,9 @@ class AsyncOpenRouterEmbedding:
             "X-Title": "Agentic RAG System",
             "Content-Type": "application/json",
         }
-        
+
         logger.debug(f"Requesting embedding for text length: {len(text)}")
-        
+
         async with self.session.post(
             f"{self.base_url}/embeddings",
             json=payload,
@@ -60,14 +61,18 @@ class AsyncOpenRouterEmbedding:
             if response.status != 200:
                 error_text = await response.text()
                 logger.error(f"Embedding API error {response.status}: {error_text}")
-                logger.error(f"Headers sent: Authorization={'Bearer ' + self.api_key[:5] + '...' if self.api_key else 'MISSING'}")
-                raise RuntimeError(f"Embedding API error {response.status}: {error_text}")
+                logger.error(
+                    f"Headers sent: Authorization={'Bearer ' + self.api_key[:5] + '...' if self.api_key else 'MISSING'}"
+                )
+                raise RuntimeError(
+                    f"Embedding API error {response.status}: {error_text}"
+                )
             result = await response.json()
             return result["data"][0]["embedding"]
-    
+
     async def embed_texts(self, texts: List[str]) -> List[List[float]]:
         await self._ensure_session()
-        
+
         payload = {"model": self.model, "input": texts}
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -75,9 +80,9 @@ class AsyncOpenRouterEmbedding:
             "X-Title": "Agentic RAG System",
             "Content-Type": "application/json",
         }
-        
+
         logger.debug(f"Requesting embeddings for {len(texts)} texts")
-        
+
         async with self.session.post(
             f"{self.base_url}/embeddings",
             json=payload,
@@ -87,11 +92,15 @@ class AsyncOpenRouterEmbedding:
             if response.status != 200:
                 error_text = await response.text()
                 logger.error(f"Embedding API error {response.status}: {error_text}")
-                logger.error(f"Headers sent: Authorization={'Bearer ' + self.api_key[:5] + '...' if self.api_key else 'MISSING'}")
-                raise RuntimeError(f"Embedding API error {response.status}: {error_text}")
+                logger.error(
+                    f"Headers sent: Authorization={'Bearer ' + self.api_key[:5] + '...' if self.api_key else 'MISSING'}"
+                )
+                raise RuntimeError(
+                    f"Embedding API error {response.status}: {error_text}"
+                )
             result = await response.json()
             return [item["embedding"] for item in result["data"]]
-    
+
     async def close(self):
         if self.session:
             await self.session.close()
@@ -100,7 +109,7 @@ class AsyncOpenRouterEmbedding:
 
 class AsyncQdrantManager:
     """Async Manager for Qdrant vector database operations."""
-    
+
     def __init__(
         self,
         url: str = "http://localhost:6333",
@@ -114,29 +123,38 @@ class AsyncQdrantManager:
         self.client: Optional[QdrantClient] = None
         self._connected = False
         self._embedder: Optional[AsyncOpenRouterEmbedding] = None
-        self._embedding_dim = 1536
-        
+        self._embedding_dim: Optional[int] = None  # Will be detected dynamically
+
         # Use provided api_key or get from environment
         openrouter_api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not openrouter_api_key:
-            logger.error("OPENROUTER_API_KEY not set. Embeddings will fail. Set it in .env file or pass it directly.")
+            logger.error(
+                "OPENROUTER_API_KEY not set. Embeddings will fail. Set it in .env file or pass it directly."
+            )
         else:
-            logger.info(f"Initializing OpenRouter embedder with key: {openrouter_api_key[:5]}...")
-            self._embedder = AsyncOpenRouterEmbedding(openrouter_api_key, embedding_model)
-    
+            logger.info(
+                f"Initializing OpenRouter embedder with key: {openrouter_api_key[:5]}..."
+            )
+            self._embedder = AsyncOpenRouterEmbedding(
+                openrouter_api_key, embedding_model
+            )
+
     async def connect(self) -> None:
         try:
             # Check if we should use in-memory mode (for development/testing without Docker)
             qdrant_mode = os.getenv("QDRANT_MODE", "remote").lower()
-            use_memory = qdrant_mode == "memory" or os.getenv("QDRANT_USE_MEMORY", "false").lower() == "true"
-            
+            use_memory = (
+                qdrant_mode == "memory"
+                or os.getenv("QDRANT_USE_MEMORY", "false").lower() == "true"
+            )
+
             if use_memory:
                 logger.info("Using in-memory Qdrant client")
                 self.client = QdrantClient(":memory:")
             else:
                 logger.info(f"Connecting to Qdrant at {self.url}")
                 self.client = QdrantClient(url=self.url)
-            
+
             self.client.get_collections()
             self._connected = True
             logger.info(f"Connected to Qdrant")
@@ -145,21 +163,43 @@ class AsyncQdrantManager:
             logger.info("Falling back to in-memory Qdrant client")
             self.client = QdrantClient(":memory:")
             self._connected = True
-    
+
     async def ensure_connected(self) -> None:
         if not self._connected or not self.client:
             await self.connect()
-    
+
     async def create_collection(self) -> None:
         await self.ensure_connected()
         try:
+            # Detect embedding dimension first
+            if self._embedding_dim is None and self._embedder:
+                logger.info("Detecting embedding dimension...")
+                test_vector = await self._embedder.embed_text("test")
+                self._embedding_dim = len(test_vector)
+                logger.info(f"Detected embedding dimension: {self._embedding_dim}")
+            elif self._embedding_dim is None:
+                raise RuntimeError("Cannot detect embedding dimension without embedder")
+
             collections = self.client.get_collections()
             collection_names = [c.name for c in collections.collections]
-            
+
             if self.collection_name in collection_names:
-                logger.info(f"Collection {self.collection_name} already exists")
-                return
-            
+                # Check if existing collection has correct dimension
+                collection_info = self.client.get_collection(self.collection_name)
+                existing_dim = collection_info.config.params.vectors.size
+
+                if existing_dim != self._embedding_dim:
+                    logger.warning(
+                        f"Collection exists with dim {existing_dim}, but model uses {self._embedding_dim}. Recreating..."
+                    )
+                    self.client.delete_collection(self.collection_name)
+                    collection_names.remove(self.collection_name)
+                else:
+                    logger.info(
+                        f"Collection {self.collection_name} already exists with correct dimension"
+                    )
+                    return
+
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=VectorParams(
@@ -167,24 +207,26 @@ class AsyncQdrantManager:
                     distance=Distance.COSINE,
                 ),
             )
-            
+
             self.client.create_payload_index(
                 collection_name=self.collection_name,
                 field_name="source",
                 field_schema=PayloadSchemaType.KEYWORD,
             )
-            
+
             self.client.create_payload_index(
                 collection_name=self.collection_name,
                 field_name="chunk_id",
                 field_schema=PayloadSchemaType.INTEGER,
             )
-            
-            logger.info(f"Created collection {self.collection_name}")
+
+            logger.info(
+                f"Created collection {self.collection_name} with dimension {self._embedding_dim}"
+            )
         except Exception as e:
             logger.error(f"Failed to create collection: {e}")
             raise
-    
+
     async def upsert_documents(
         self,
         documents: List[Dict[str, Any]],
@@ -194,10 +236,10 @@ class AsyncQdrantManager:
         try:
             if not self._embedder:
                 raise RuntimeError("OpenRouter embedder not initialized")
-            
+
             texts = [doc["content"] for doc in documents]
             embeddings = await self._embedder.embed_texts(texts)
-            
+
             points = []
             for idx, (doc, embedding) in enumerate(zip(documents, embeddings)):
                 point = PointStruct(
@@ -210,27 +252,29 @@ class AsyncQdrantManager:
                         "page": doc.get("page"),
                         "metadata": doc.get("metadata", {}),
                         "timestamp": datetime.utcnow().isoformat() + "Z",
-                        "embedding_model": doc.get("embedding_model", self.embedding_model),
+                        "embedding_model": doc.get(
+                            "embedding_model", self.embedding_model
+                        ),
                     },
                 )
                 points.append(point)
-            
+
             total_inserted = 0
             for i in range(0, len(points), batch_size):
-                batch = points[i:i + batch_size]
+                batch = points[i : i + batch_size]
                 result = self.client.upsert(
                     collection_name=self.collection_name,
                     points=batch,
                 )
                 if result.status == "completed":
                     total_inserted += len(batch)
-            
+
             logger.info(f"Upserted {total_inserted} documents")
             return total_inserted
         except Exception as e:
             logger.error(f"Failed to upsert documents: {e}")
             raise
-    
+
     async def hybrid_search(
         self,
         query: str,
@@ -243,10 +287,10 @@ class AsyncQdrantManager:
             query_vector = None
             if self._embedder:
                 query_vector = await self._embedder.embed_text(query)
-            
+
             if not query_vector:
                 raise RuntimeError("Could not generate query embedding")
-            
+
             search_filter = None
             if where_filter:
                 conditions = []
@@ -259,7 +303,7 @@ class AsyncQdrantManager:
                     )
                 if conditions:
                     search_filter = Filter(must=conditions)
-            
+
             results = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,
@@ -267,25 +311,27 @@ class AsyncQdrantManager:
                 limit=limit,
                 score_threshold=0.0,
             )
-            
+
             formatted = []
             for result in results:
-                formatted.append({
-                    "content": result.payload.get("content", ""),
-                    "source": result.payload.get("source"),
-                    "chunk_id": result.payload.get("chunk_id"),
-                    "page": result.payload.get("page"),
-                    "metadata": result.payload.get("metadata"),
-                    "score": result.score,
-                    "id": result.id,
-                })
-            
+                formatted.append(
+                    {
+                        "content": result.payload.get("content", ""),
+                        "source": result.payload.get("source"),
+                        "chunk_id": result.payload.get("chunk_id"),
+                        "page": result.payload.get("page"),
+                        "metadata": result.payload.get("metadata"),
+                        "score": result.score,
+                        "id": result.id,
+                    }
+                )
+
             logger.debug(f"Search returned {len(formatted)} results")
             return formatted
         except Exception as e:
             logger.error(f"Search failed: {e}")
             raise
-    
+
     async def vector_search(
         self,
         query: str,
@@ -297,7 +343,7 @@ class AsyncQdrantManager:
             limit=limit,
             where_filter=where_filter,
         )
-    
+
     async def delete_by_source(self, source: str) -> int:
         await self.ensure_connected()
         try:
@@ -313,35 +359,39 @@ class AsyncQdrantManager:
                 ),
             )
             logger.info(f"Deleted documents from source: {source}")
-            return result.operation_id if hasattr(result, 'operation_id') else 0
+            return result.operation_id if hasattr(result, "operation_id") else 0
         except Exception as e:
             logger.error(f"Failed to delete documents: {e}")
             raise
-    
+
     async def get_stats(self) -> Dict[str, Any]:
         await self.ensure_connected()
         try:
             info = self.client.get_collection(self.collection_name)
             # Handle both server and in-memory modes
-            vectors_count = getattr(info, 'vectors_count', None) or getattr(info, 'points_count', 0)
-            points_count = getattr(info, 'points_count', 0)
-            status = getattr(info, 'status', 'active')
-            
+            vectors_count = getattr(info, "vectors_count", None) or getattr(
+                info, "points_count", 0
+            )
+            points_count = getattr(info, "points_count", 0)
+            status = getattr(info, "status", "active")
+
             return {
                 "collection_name": self.collection_name,
-                "vectors_count": vectors_count if vectors_count is not None else points_count,
+                "vectors_count": vectors_count
+                if vectors_count is not None
+                else points_count,
                 "points_count": points_count,
                 "status": str(status) if status else "active",
             }
         except Exception as e:
             logger.error(f"Failed to get stats: {e}")
             raise
-    
+
     async def close(self) -> None:
         if self.client:
             self.client.close()
             self._connected = False
             logger.info("Closed Qdrant connection")
-        
+
         if self._embedder:
             await self._embedder.close()
