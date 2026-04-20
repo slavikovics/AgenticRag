@@ -12,12 +12,6 @@ services:
       - qdrant_storage:/qdrant/storage
     networks:
       - agentic-rag
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
 
   # Python API Service
   api:
@@ -38,9 +32,6 @@ services:
       - TEMPERATURE=${TEMPERATURE:-0.7}
       - MAX_TOKENS=${MAX_TOKENS:-2048}
       - MEMORY_SIZE=${MEMORY_SIZE:-20}
-    depends_on:
-      qdrant:
-        condition: service_healthy
     networks:
       - agentic-rag
     restart: unless-stopped
