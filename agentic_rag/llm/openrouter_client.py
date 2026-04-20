@@ -42,7 +42,7 @@ class OpenRouterConfig:
     """Configuration for OpenRouter client."""
     api_key: str = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     base_url: str = "https://openrouter.io/api/v1"
-    model: ModelProvider = ModelProvider.OPENAI_4_TURBO
+    model: str = field(default_factory=lambda: os.getenv("OPENROUTER_LLM_MODEL", "openai/gpt-4-turbo-preview"))
     temperature: float = 0.7
     max_tokens: int = 2048
     top_p: float = 1.0
@@ -118,8 +118,13 @@ class OpenRouterClient:
         
         await self._ensure_session()
         
+        # Handle both string model names and ModelProvider enum
+        model_value = self.config.model
+        if isinstance(model_value, ModelProvider):
+            model_value = model_value.value
+        
         payload = {
-            "model": self.config.model.value if isinstance(self.config.model, ModelProvider) else self.config.model,
+            "model": model_value,
             "messages": messages,
             "temperature": kwargs.get("temperature", self.config.temperature),
             "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
@@ -181,8 +186,10 @@ class OpenRouterClient:
             self.total_tokens_used += input_tokens + output_tokens
             
             # Calculate cost
-            model = self.config.model.value if isinstance(self.config.model, ModelProvider) else self.config.model
-            prices = self._token_prices.get(model, (0.0, 0.0))
+            model_value = self.config.model
+            if isinstance(model_value, ModelProvider):
+                model_value = model_value.value
+            prices = self._token_prices.get(model_value, (0.0, 0.0))
             cost = (input_tokens * prices[0] + output_tokens * prices[1]) / 1000
             self.total_cost += cost
             
@@ -297,11 +304,13 @@ class OpenRouterClient:
 # Convenience function
 async def get_openrouter_response(
     messages: List[Dict[str, Any]],
-    model: ModelProvider = ModelProvider.OPENAI_4_TURBO,
+    model: Optional[str] = None,
     temperature: float = 0.7,
     **kwargs
 ) -> str:
     """One-shot completion with OpenRouter."""
+    if model is None:
+        model = os.getenv("OPENROUTER_LLM_MODEL", "openai/gpt-4-turbo-preview")
     config = OpenRouterConfig(model=model, temperature=temperature, **kwargs)
     async with OpenRouterClient(config) as client:
         return await client.complete(messages)

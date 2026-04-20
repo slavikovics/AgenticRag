@@ -27,6 +27,35 @@ services:
       retries: 5
       start_period: 40s
 
+  # Python API Service
+  api:
+    build:
+      context: .
+      dockerfile: agentic_rag/Dockerfile
+    container_name: agentic-rag-api
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_LLM_MODEL=${OPENROUTER_LLM_MODEL:-openai/gpt-4-turbo-preview}
+      - OPENROUTER_EMBEDDING_MODEL=${OPENROUTER_EMBEDDING_MODEL:-openai/text-embedding-3-small}
+      - WEAVIATE_URL=http://weaviate:8080
+      - WEAVIATE_API_KEY=weaviate-key-1
+      - WEAVIATE_CLASS_NAME=Document
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - MAX_ITERATIONS=${MAX_ITERATIONS:-10}
+      - TEMPERATURE=${TEMPERATURE:-0.7}
+      - MAX_TOKENS=${MAX_TOKENS:-2048}
+      - MEMORY_SIZE=${MEMORY_SIZE:-20}
+    depends_on:
+      weaviate:
+        condition: service_healthy
+    networks:
+      - agentic-rag
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+
 volumes:
   weaviate_data:
 
