@@ -4,13 +4,13 @@ Async OpenRouter LLM client with streaming, retries, and cost tracking.
 
 import os
 import json
-import time
 import asyncio
-import aiohttp
 import logging
 from typing import Optional, AsyncGenerator, Any, Dict, List, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+
+import aiohttp
 
 logger = logging.getLogger(__name__)
 

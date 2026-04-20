@@ -4,7 +4,6 @@ Uses Qdrant vector database and OpenRouter for LLM and embeddings.
 """
 
 import os
-from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
