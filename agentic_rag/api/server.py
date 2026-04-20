@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO)
 class QueryRequest(BaseModel):
     """Request body for RAG query."""
     query: str
-    model: Optional[str] = "openai/gpt-4-turbo-preview"
+    model: Optional[str] = None  # Uses OPENROUTER_LLM_MODEL from env if not specified
     temperature: Optional[float] = 0.7
     include_sources: Optional[bool] = True
     max_iterations: Optional[int] = 10
@@ -70,7 +70,7 @@ class HealthResponse(BaseModel):
     """Health check response."""
     status: str
     weaviate: dict
-    llm_client: str
+    llm_client: str = "openrouter"
     version: str = "1.0.0"
 
 
@@ -112,7 +112,7 @@ async def get_weaviate_manager():
     return _weaviate_manager
 
 
-async def get_agent(model: str = "openai/gpt-4-turbo-preview", temperature: float = 0.7):
+async def get_agent(model: Optional[str] = None, temperature: float = 0.7):
     """Get or create agent."""
     global _agent
     if _agent is None:
@@ -278,7 +278,7 @@ async def websocket_query(websocket: WebSocket):
         "type": "query",
         "payload": {
             "query": "What is X?",
-            "model": "openai/gpt-4-turbo-preview"
+            "model": "openai/gpt-4-turbo-preview"  // Optional, uses OPENROUTER_LLM_MODEL from env if not specified
         }
     }
     ```
