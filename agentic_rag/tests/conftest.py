@@ -4,6 +4,8 @@ Pytest configuration and fixtures for Agentic RAG tests.
 
 import os
 import pytest
+import pytest_asyncio
+from httpx import AsyncClient, ASGITransport
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -20,8 +22,17 @@ def setup_env():
         os.environ["QDRANT_COLLECTION_NAME"] = "test_documents"
     
     if not os.getenv("QDRANT_MODE"):
-        os.environ["QDRANT_MODE"] = "remote"
+        os.environ["QDRANT_MODE"] = "memory"  # Use in-memory mode for tests
     
     yield
     
     # Cleanup if needed
+
+
+@pytest_asyncio.fixture(scope="function")
+async def client():
+    """Create async test client for FastAPI app."""
+    from agentic_rag.api.server import app
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        yield ac
