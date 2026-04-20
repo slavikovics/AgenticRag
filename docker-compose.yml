@@ -11,10 +11,8 @@ services:
       AUTHENTICATION_APIKEY_ENABLED: "true"
       AUTHENTICATION_APIKEY_ALLOWED_KEYS: "weaviate-key-1"
       AUTHENTICATION_APIKEY_USERS: "weaviate-user"
-      DEFAULT_VECTORIZER_MODULE: "text2vec-openai"
-      ENABLE_MODULES: "text2vec-openai"
-      OPENAI_APIKEY: "${OPENROUTER_API_KEY}"
-      OPENAI_BASEURL: "https://openrouter.ai/api/v1"
+      DEFAULT_VECTORIZER_MODULE: "none"
+      ENABLE_MODULES: "text2vec-none"
       LOG_LEVEL: "info"
     volumes:
       - weaviate_data:/var/lib/weaviate

@@ -107,6 +107,7 @@ async def get_weaviate_manager():
             url=settings.weaviate_url,
             api_key=settings.weaviate_api_key,
             class_name=settings.weaviate_class_name,
+            embedding_model=settings.openrouter_embedding_model,
         )
         await _weaviate_manager.connect()
         await _weaviate_manager.create_schema()
