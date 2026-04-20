@@ -6,6 +6,7 @@ Demonstrates full workflow with async operations.
 import os
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from typing import Optional
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.responses import StreamingResponse
@@ -129,6 +130,35 @@ async def get_agent(model: Optional[str] = None, temperature: float = 0.7):
     return _agent
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown."""
+    logger.info("Starting Agentic RAG API...")
+    try:
+        # Initialize managers
+        llm = await get_llm_client()
+        weaviate = await get_weaviate_manager()
+        logger.info("Initialization complete")
+    except Exception as e:
+        logger.error(f"Startup failed: {e}")
+        raise
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down...")
+    global _weaviate_manager, _llm_client, _agent
+    
+    if _weaviate_manager:
+        await _weaviate_manager.close()
+    
+    if _llm_client:
+        await _llm_client.close()
+    
+    _agent = None
+    logger.info("Shutdown complete")
+
+
 # ============================================================================
 # FastAPI Application
 # ============================================================================
@@ -137,6 +167,7 @@ app = FastAPI(
     title="Agentic RAG API",
     description="Production-ready RAG system with agents",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware
@@ -400,39 +431,6 @@ async def delete_documents(source: str):
         logger.error(f"Deletion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ============================================================================
-# Startup & Shutdown
-# ============================================================================
-
-@app.on_event("startup")
-async def startup():
-    """Initialize components on startup."""
-    logger.info("Starting Agentic RAG API...")
-    try:
-        # Initialize managers
-        llm = await get_llm_client()
-        weaviate = await get_weaviate_manager()
-        logger.info("Initialization complete")
-    except Exception as e:
-        logger.error(f"Startup failed: {e}")
-        raise
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    """Cleanup on shutdown."""
-    logger.info("Shutting down...")
-    global _weaviate_manager, _llm_client, _agent
-    
-    if _weaviate_manager:
-        await _weaviate_manager.close()
-    
-    if _llm_client:
-        await _llm_client.close()
-    
-    _agent = None
-    logger.info("Shutdown complete")
 
 
 # ============================================================================
