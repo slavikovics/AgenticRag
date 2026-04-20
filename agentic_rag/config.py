@@ -1,5 +1,6 @@
 """
 Configuration management for Agentic RAG system.
+Uses Qdrant vector database and OpenRouter for LLM and embeddings.
 """
 
 import os
@@ -17,14 +18,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
     
-    # Weaviate settings
-    weaviate_url: str = Field(default="http://localhost:8080")
-    weaviate_api_key: Optional[str] = Field(default=None)
-    weaviate_class_name: str = Field(default="Document")
+    # Qdrant settings
+    qdrant_url: str = Field(default="http://localhost:6333")
+    qdrant_collection_name: str = Field(default="documents")
     
     # OpenRouter settings (for both LLM and embeddings)
     openrouter_api_key: str = Field(...)
-    openrouter_base_url: str = Field(default="https://openrouter.io/api/v1")
+    openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
     openrouter_llm_model: str = Field(default="openai/gpt-4-turbo-preview")
     openrouter_embedding_model: str = Field(default="openai/text-embedding-3-small")
     

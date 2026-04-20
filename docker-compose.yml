@@ -1,30 +1,23 @@
 services:
-  # Weaviate Vector Database
-  weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.25.0
-    container_name: weaviate
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:v1.13.3
+    container_name: qdrant
     ports:
-      - "8080:8080"
-      - "50051:50051"
+      - "6333:6333"
+      - "6334:6334"
     environment:
-      QUERY_DEFAULTS_LIMIT: 25
-      AUTHENTICATION_APIKEY_ENABLED: "true"
-      AUTHENTICATION_APIKEY_ALLOWED_KEYS: "weaviate-key-1"
-      AUTHENTICATION_APIKEY_USERS: "weaviate-user"
-      DEFAULT_VECTORIZER_MODULE: "none"
-      ENABLE_MODULES: ""
-      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
-      LOG_LEVEL: "info"
+      - QDRANT__SERVICE__GRPC_PORT=6334
     volumes:
-      - weaviate_data:/var/lib/weaviate
+      - qdrant_storage:/qdrant/storage
     networks:
       - agentic-rag
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready" ]
-      interval: 10s
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 5s
       timeout: 5s
-      retries: 10
-      start_period: 60s
+      retries: 5
+      start_period: 10s
 
   # Python API Service
   api:
@@ -38,16 +31,15 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENROUTER_LLM_MODEL=${OPENROUTER_LLM_MODEL:-openai/gpt-4-turbo-preview}
       - OPENROUTER_EMBEDDING_MODEL=${OPENROUTER_EMBEDDING_MODEL:-openai/text-embedding-3-small}
-      - WEAVIATE_URL=http://weaviate:8080
-      - WEAVIATE_API_KEY=weaviate-key-1
-      - WEAVIATE_CLASS_NAME=Document
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION_NAME=documents
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - MAX_ITERATIONS=${MAX_ITERATIONS:-10}
       - TEMPERATURE=${TEMPERATURE:-0.7}
       - MAX_TOKENS=${MAX_TOKENS:-2048}
       - MEMORY_SIZE=${MEMORY_SIZE:-20}
     depends_on:
-      weaviate:
+      qdrant:
         condition: service_healthy
     networks:
       - agentic-rag
@@ -56,7 +48,7 @@ services:
       - ./data:/app/data
 
 volumes:
-  weaviate_data:
+  qdrant_storage:
 
 networks:
   agentic-rag:
