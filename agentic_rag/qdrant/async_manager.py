@@ -114,7 +114,7 @@ class AsyncQdrantManager:
         self.client: Optional[QdrantClient] = None
         self._connected = False
         self._embedder: Optional[AsyncOpenRouterEmbedding] = None
-        self._embedding_dim = 1536
+        self._embedding_dim: Optional[int] = None  # Will be detected dynamically
         
         # Use provided api_key or get from environment
         openrouter_api_key = api_key or os.getenv("OPENROUTER_API_KEY")
@@ -153,12 +153,30 @@ class AsyncQdrantManager:
     async def create_collection(self) -> None:
         await self.ensure_connected()
         try:
+            # Detect embedding dimension first
+            if self._embedding_dim is None and self._embedder:
+                logger.info("Detecting embedding dimension...")
+                test_vector = await self._embedder.embed_text("test")
+                self._embedding_dim = len(test_vector)
+                logger.info(f"Detected embedding dimension: {self._embedding_dim}")
+            elif self._embedding_dim is None:
+                raise RuntimeError("Cannot detect embedding dimension without embedder")
+            
             collections = self.client.get_collections()
             collection_names = [c.name for c in collections.collections]
             
             if self.collection_name in collection_names:
-                logger.info(f"Collection {self.collection_name} already exists")
-                return
+                # Check if existing collection has correct dimension
+                collection_info = self.client.get_collection(self.collection_name)
+                existing_dim = collection_info.config.params.vectors.size
+                
+                if existing_dim != self._embedding_dim:
+                    logger.warning(f"Collection exists with dim {existing_dim}, but model uses {self._embedding_dim}. Recreating...")
+                    self.client.delete_collection(self.collection_name)
+                    collection_names.remove(self.collection_name)
+                else:
+                    logger.info(f"Collection {self.collection_name} already exists with correct dimension")
+                    return
             
             self.client.create_collection(
                 collection_name=self.collection_name,
@@ -180,7 +198,7 @@ class AsyncQdrantManager:
                 field_schema=PayloadSchemaType.INTEGER,
             )
             
-            logger.info(f"Created collection {self.collection_name}")
+            logger.info(f"Created collection {self.collection_name} with dimension {self._embedding_dim}")
         except Exception as e:
             logger.error(f"Failed to create collection: {e}")
             raise
