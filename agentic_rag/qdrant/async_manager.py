@@ -304,13 +304,13 @@ class AsyncQdrantManager:
                 if conditions:
                     search_filter = Filter(must=conditions)
 
-            results = self.client.search(
+            results = self.client.query_points(
                 collection_name=self.collection_name,
-                query_vector=query_vector,
+                query=query_vector,
                 query_filter=search_filter,
                 limit=limit,
                 score_threshold=0.0,
-            )
+            ).points
 
             formatted = []
             for result in results:

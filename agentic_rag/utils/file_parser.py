@@ -33,7 +33,7 @@ def parse_pdf_file(file_path: str) -> str:
         reader = PdfReader(file_path)
         text_parts = []
         
-        for page_num, page in enumerate(reader.pages):
+        for page in reader.pages:
             text = page.extract_text()
             if text:
                 text_parts.append(text)

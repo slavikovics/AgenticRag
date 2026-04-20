@@ -192,7 +192,7 @@ class QdrantManager:
                 loop.close()
             
             points = []
-            for idx, (doc, embedding) in enumerate(zip(documents, embeddings)):
+            for doc, embedding in zip(documents, embeddings):
                 point = PointStruct(
                     id=doc.get("id", abs(hash(doc["content"])) % (2**63)),
                     vector=embedding,
@@ -258,13 +258,13 @@ class QdrantManager:
                 if conditions:
                     search_filter = Filter(must=conditions)
             
-            results = self.client.search(
+            results = self.client.query_points(
                 collection_name=self.collection_name,
-                query_vector=query_vector,
+                query=query_vector,
                 query_filter=search_filter,
                 limit=limit,
                 score_threshold=score_threshold,
-            )
+            ).points
             
             formatted = []
             for result in results:

@@ -1,3 +1,5 @@
+```
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,21 +22,51 @@ wheels/
 *.egg
 
 # Environment
-.env
-.env.local
-.env.*
-
-# Tests
-.pytest_cache/
-.coverage
-htmlcov/
+.venv/
+venv/
+env/
+ENV/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*.tmp
 
 # Logs
 *.log
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# System
+.DS_Store
+Thumbs.db
+```
