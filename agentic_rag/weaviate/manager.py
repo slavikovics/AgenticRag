@@ -40,7 +40,7 @@ class WeaviateManager:
     def connect(self) -> None:
         """Establish connection to Weaviate."""
         try:
-            # Connect to Weaviate
+            # Connect to Weaviate with OpenRouter-compatible configuration
             if self.api_key:
                 self.client = weaviate.connect_to_custom(
                     http_host=self.url.replace("http://", "").replace("https://", "").split(":")[0],
@@ -81,7 +81,8 @@ class WeaviateManager:
                 logger.info(f"Collection {self.class_name} already exists")
                 return
             
-            # Create collection with new API
+            # Create collection with OpenRouter-compatible embedding module
+            # Using text2vec-openai module but configured to work with OpenRouter's OpenAI-compatible API
             collection = self.client.collections.create(
                 name=self.class_name,
                 description="Document chunks for RAG",
