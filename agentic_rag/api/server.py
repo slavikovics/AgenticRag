@@ -13,10 +13,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
 
-# Import custom modules (adjust imports based on your structure)
-# from src.llm.openrouter_client import OpenRouterClient, OpenRouterConfig, ModelProvider
-# from src.weaviate_manager import AsyncWeaviateManager
-# from src.agents.base_agent import AgenticRAG, AgentConfig
+# Import custom modules
+from agentic_rag.llm.openrouter_client import OpenRouterClient, OpenRouterConfig
+from agentic_rag.weaviate.manager import AsyncWeaviateManager
+from agentic_rag.agents.base_agent import AgenticRAG, AgentConfig
+from agentic_rag.config import settings
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -88,13 +89,13 @@ async def get_llm_client():
     """Lazy load LLM client."""
     global _llm_client
     if _llm_client is None:
-        # Commented out for example - uncomment with real imports
-        # config = OpenRouterConfig(
-        #     api_key=os.getenv("OPENROUTER_API_KEY"),
-        #     model=ModelProvider.OPENAI_4_TURBO,
-        # )
-        # _llm_client = OpenRouterClient(config)
-        pass
+        config = OpenRouterConfig(
+            api_key=settings.openrouter_api_key,
+            model=settings.openrouter_llm_model,
+            temperature=settings.temperature,
+            max_tokens=settings.max_tokens,
+        )
+        _llm_client = OpenRouterClient(config)
     return _llm_client
 
 
@@ -102,13 +103,13 @@ async def get_weaviate_manager():
     """Lazy load Weaviate manager."""
     global _weaviate_manager
     if _weaviate_manager is None:
-        # Commented out for example
-        # _weaviate_manager = AsyncWeaviateManager(
-        #     url=os.getenv("WEAVIATE_URL", "http://localhost:8080"),
-        #     class_name="Document",
-        # )
-        # await _weaviate_manager.connect()
-        pass
+        _weaviate_manager = AsyncWeaviateManager(
+            url=settings.weaviate_url,
+            api_key=settings.weaviate_api_key,
+            class_name=settings.weaviate_class_name,
+        )
+        await _weaviate_manager.connect()
+        await _weaviate_manager.create_schema()
     return _weaviate_manager
 
 
@@ -118,7 +119,11 @@ async def get_agent(model: Optional[str] = None, temperature: float = 0.7):
     if _agent is None:
         llm = await get_llm_client()
         retriever = await get_weaviate_manager()
-        config = AgentConfig(max_iterations=10, verbose=True)
+        config = AgentConfig(
+            max_iterations=settings.max_iterations,
+            memory_size=settings.memory_size,
+            verbose=True,
+        )
         _agent = AgenticRAG(llm, retriever, config)
     return _agent
 
@@ -155,8 +160,8 @@ async def health_check():
         llm = await get_llm_client()
         
         stats = {}
-        # if weaviate:
-        #     stats = await weaviate.get_stats()
+        if weaviate:
+            stats = await weaviate.get_stats()
         
         return HealthResponse(
             status="healthy",
@@ -173,9 +178,8 @@ async def get_stats():
     """Get system statistics."""
     try:
         weaviate = await get_weaviate_manager()
-        # stats = await weaviate.get_stats()
-        # return stats
-        return {"status": "ok"}
+        stats = await weaviate.get_stats()
+        return stats
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -191,26 +195,26 @@ async def search_knowledge_base(request: SearchRequest):
     try:
         retriever = await get_weaviate_manager()
         
-        # results = await retriever.hybrid_search(
-        #     query=request.query,
-        #     limit=request.limit,
-        #     alpha=request.alpha,
-        # )
+        results = await retriever.hybrid_search(
+            query=request.query,
+            limit=request.limit,
+            alpha=request.alpha,
+        )
         
-        # formatted = [
-        #     SearchResult(
-        #         content=r["content"],
-        #         source=r["source"],
-        #         chunk_id=r["chunk_id"],
-        #         score=r["score"],
-        #     )
-        #     for r in results
-        # ]
+        formatted = [
+            SearchResult(
+                content=r["content"],
+                source=r["source"],
+                chunk_id=r["chunk_id"],
+                score=r["score"],
+            )
+            for r in results
+        ]
         
         return SearchResponse(
             query=request.query,
-            results=[],  # formatted,
-            count=0,  # len(formatted),
+            results=formatted,
+            count=len(formatted),
         )
     
     except Exception as e:
@@ -244,7 +248,7 @@ async def agentic_query(request: QueryRequest):
         
         # Get sources from memory (simplified)
         history = agent.get_conversation_history()
-        sources = []
+        sources = agent.get_sources()
         
         # Get LLM cost
         llm = await get_llm_client()
@@ -367,11 +371,11 @@ async def index_documents(documents: list[dict]):
     """
     try:
         retriever = await get_weaviate_manager()
-        # count = await retriever.upsert_documents(documents)
+        count = await retriever.upsert_documents(documents)
         
         return {
             "status": "success",
-            "documents_indexed": 0,  # count,
+            "documents_indexed": count,
         }
     
     except Exception as e:
@@ -384,11 +388,11 @@ async def delete_documents(source: str):
     """Delete all documents from a source."""
     try:
         retriever = await get_weaviate_manager()
-        # count = await retriever.delete_by_source(source)
+        count = await retriever.delete_by_source(source)
         
         return {
             "status": "success",
-            "documents_deleted": 0,  # count,
+            "documents_deleted": count,
         }
     
     except Exception as e:
