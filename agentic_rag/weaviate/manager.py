@@ -1,5 +1,6 @@
 """
 Weaviate vector database manager with hybrid search (BM25 + semantic).
+Uses OpenRouter for embeddings.
 """
 
 import os
@@ -7,11 +8,92 @@ import asyncio
 import logging
 from typing import Optional, Any, Dict, List
 from datetime import datetime
+import aiohttp
 import weaviate
 from weaviate.classes.config import Configure, Property, DataType
 from weaviate.collections.classes.types import WeaviateField
 
 logger = logging.getLogger(__name__)
+
+
+class OpenRouterEmbedding:
+    """Generate embeddings using OpenRouter API."""
+    
+    def __init__(self, api_key: str, model: str = "openai/text-embedding-3-small"):
+        self.api_key = api_key
+        self.model = model
+        self.base_url = "https://openrouter.ai/api/v1"
+        self.session: Optional[aiohttp.ClientSession] = None
+    
+    async def _ensure_session(self):
+        """Ensure aiohttp session exists."""
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+    
+    async def embed_text(self, text: str) -> List[float]:
+        """Generate embedding for a single text."""
+        await self._ensure_session()
+        
+        payload = {
+            "model": self.model,
+            "input": [text],
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer": "https://github.com/agentic-rag",
+            "X-Title": "Agentic RAG System",
+            "Content-Type": "application/json",
+        }
+        
+        async with self.session.post(
+            f"{self.base_url}/embeddings",
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=60),
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise RuntimeError(f"Embedding API error {response.status}: {error_text}")
+            
+            result = await response.json()
+            return result["data"][0]["embedding"]
+    
+    async def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for multiple texts."""
+        await self._ensure_session()
+        
+        # OpenRouter supports batch embeddings
+        payload = {
+            "model": self.model,
+            "input": texts,
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer": "https://github.com/agentic-rag",
+            "X-Title": "Agentic RAG System",
+            "Content-Type": "application/json",
+        }
+        
+        async with self.session.post(
+            f"{self.base_url}/embeddings",
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=120),
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise RuntimeError(f"Embedding API error {response.status}: {error_text}")
+            
+            result = await response.json()
+            return [item["embedding"] for item in result["data"]]
+    
+    async def close(self):
+        """Close the session."""
+        if self.session:
+            await self.session.close()
+            self.session = None
 
 
 class WeaviateManager:
@@ -22,20 +104,29 @@ class WeaviateManager:
         url: str = "http://localhost:8080",
         api_key: Optional[str] = None,
         class_name: str = "Document",
+        embedding_model: str = "openai/text-embedding-3-small",
     ):
         """
         Initialize Weaviate manager.
         
         Args:
             url: Weaviate instance URL
-            api_key: API key if using Weaviate Cloud
+            api_key: API key for Weaviate authentication
             class_name: Class name for document storage
+            embedding_model: OpenRouter embedding model to use
         """
         self.url = url
         self.api_key = api_key
         self.class_name = class_name
+        self.embedding_model = embedding_model
         self.client = None
         self._connected = False
+        self._embedder: Optional[OpenRouterEmbedding] = None
+        
+        # Get OpenRouter API key from environment
+        openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        if openrouter_api_key:
+            self._embedder = OpenRouterEmbedding(openrouter_api_key, embedding_model)
     
     def connect(self) -> None:
         """Establish connection to Weaviate."""
@@ -81,12 +172,12 @@ class WeaviateManager:
                 logger.info(f"Collection {self.class_name} already exists")
                 return
             
-            # Create collection with OpenRouter-compatible embedding module
-            # Using text2vec-openai module but configured to work with OpenRouter's OpenAI-compatible API
+            # Create collection without vectorizer (we'll provide vectors manually via OpenRouter)
+            # Using none vectorizer since we generate embeddings via OpenRouter API
             collection = self.client.collections.create(
                 name=self.class_name,
                 description="Document chunks for RAG",
-                vectorizer_config=Configure.Vectorizer.text2vec_openai(),
+                vectorizer_config=None,  # No built-in vectorizer, we provide vectors manually
                 properties=[
                     Property(
                         name="content",
@@ -152,8 +243,24 @@ class WeaviateManager:
         try:
             collection = self.client.collections.get(self.class_name)
             
+            # Generate embeddings using OpenRouter
+            if not self._embedder:
+                raise RuntimeError("OpenRouter embedder not initialized. Set OPENROUTER_API_KEY environment variable.")
+            
+            # Extract texts for embedding
+            texts = [doc["content"] for doc in documents]
+            
+            # Generate embeddings in batch
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                embeddings = loop.run_until_complete(self._embedder.embed_texts(texts))
+            finally:
+                loop.close()
+            
             with collection.batch.dynamic() as batch:
-                for doc in documents:
+                for doc, embedding in zip(documents, embeddings):
                     obj = {
                         "content": doc["content"],
                         "source": doc.get("source", "unknown"),
@@ -161,15 +268,15 @@ class WeaviateManager:
                         "page": doc.get("page"),
                         "metadata": doc.get("metadata", {}),
                         "timestamp": datetime.utcnow().isoformat() + "Z",
-                        "embedding_model": doc.get("embedding_model", "unknown"),
+                        "embedding_model": doc.get("embedding_model", self.embedding_model),
                     }
                     
                     # Use content hash as UUID if provided
                     uuid = doc.get("id")
                     if uuid:
-                        batch.add_object(properties=obj, uuid=uuid)
+                        batch.add_object(properties=obj, uuid=uuid, vector=embedding)
                     else:
-                        batch.add_object(properties=obj)
+                        batch.add_object(properties=obj, vector=embedding)
             
             failed = collection.batch.failed_objects
             if failed:
@@ -207,13 +314,33 @@ class WeaviateManager:
         try:
             collection = self.client.collections.get(self.class_name)
             
-            # Build query
-            hybrid_query = collection.query.hybrid(
-                query=query,
-                alpha=alpha,
-                limit=limit,
-                return_metadata=["score"],
-            )
+            # Generate embedding for the query using OpenRouter
+            query_vector = None
+            if self._embedder:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    query_vector = loop.run_until_complete(self._embedder.embed_text(query))
+                finally:
+                    loop.close()
+            
+            # Build query - use hybrid if we have a vector, otherwise BM25 only
+            if query_vector:
+                hybrid_query = collection.query.hybrid(
+                    query=query,
+                    vector=query_vector,
+                    alpha=alpha,
+                    limit=limit,
+                    return_metadata=["score"],
+                )
+            else:
+                # Fallback to BM25 only
+                hybrid_query = collection.query.bm25(
+                    query=query,
+                    limit=limit,
+                    return_metadata=["score"],
+                )
             
             if where_filter:
                 hybrid_query = hybrid_query.with_where(where_filter)
@@ -262,16 +389,28 @@ class WeaviateManager:
         try:
             collection = self.client.collections.get(self.class_name)
             
-            near_text_query = collection.query.near_text(
-                query=query,
+            # Generate embedding for the query using OpenRouter
+            if not self._embedder:
+                raise RuntimeError("OpenRouter embedder not initialized. Set OPENROUTER_API_KEY environment variable.")
+            
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                query_vector = loop.run_until_complete(self._embedder.embed_text(query))
+            finally:
+                loop.close()
+            
+            near_vector_query = collection.query.near_vector(
+                near_vector=query_vector,
                 limit=limit,
                 return_metadata=["distance"],
             )
             
             if where_filter:
-                near_text_query = near_text_query.with_where(where_filter)
+                near_vector_query = near_vector_query.with_where(where_filter)
             
-            response = near_text_query.fetch_objects()
+            response = near_vector_query.fetch_objects()
             
             formatted = []
             for obj in response.objects:
@@ -361,6 +500,7 @@ class AsyncWeaviateManager:
     def __init__(self, *args, **kwargs):
         self._manager = WeaviateManager(*args, **kwargs)
         self._lock = asyncio.Lock()
+        self._embedder = self._manager._embedder
     
     async def connect(self):
         """Async connect."""
@@ -434,3 +574,5 @@ class AsyncWeaviateManager:
         """Async close."""
         async with self._lock:
             await asyncio.to_thread(self._manager.close)
+            if self._embedder:
+                await self._embedder.close()
