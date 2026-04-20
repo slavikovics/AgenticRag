@@ -1,6 +1,6 @@
 """
 Complete FastAPI server for Agentic RAG system.
-Demonstrates full workflow with async operations.
+Uses Qdrant vector database with OpenRouter for embeddings and LLM.
 """
 
 import os
@@ -16,7 +16,7 @@ import json
 
 # Import custom modules
 from agentic_rag.llm.openrouter_client import OpenRouterClient, OpenRouterConfig
-from agentic_rag.weaviate.manager import AsyncWeaviateManager
+from agentic_rag.qdrant.async_manager import AsyncQdrantManager
 from agentic_rag.agents.base_agent import AgenticRAG, AgentConfig
 from agentic_rag.config import settings
 
@@ -31,7 +31,7 @@ logging.basicConfig(level=logging.INFO)
 class QueryRequest(BaseModel):
     """Request body for RAG query."""
     query: str
-    model: Optional[str] = None  # Uses OPENROUTER_LLM_MODEL from env if not specified
+    model: Optional[str] = None
     temperature: Optional[float] = 0.7
     include_sources: Optional[bool] = True
     max_iterations: Optional[int] = 10
@@ -50,7 +50,7 @@ class SearchRequest(BaseModel):
     """Request for knowledge base search."""
     query: str
     limit: Optional[int] = 10
-    alpha: Optional[float] = 0.5  # Balance between BM25 and semantic search
+    alpha: Optional[float] = 0.5
 
 
 class SearchResult(BaseModel):
@@ -71,18 +71,17 @@ class SearchResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Health check response."""
     status: str
-    weaviate: dict
+    qdrant: dict
     llm_client: str = "openrouter"
     version: str = "1.0.0"
 
 
 # ============================================================================
-# Global State (in production, use dependency injection)
+# Global State
 # ============================================================================
 
-# Lazy-loaded components
 _llm_client = None
-_weaviate_manager = None
+_qdrant_manager = None
 _agent = None
 
 
@@ -100,19 +99,18 @@ async def get_llm_client():
     return _llm_client
 
 
-async def get_weaviate_manager():
-    """Lazy load Weaviate manager."""
-    global _weaviate_manager
-    if _weaviate_manager is None:
-        _weaviate_manager = AsyncWeaviateManager(
-            url=settings.weaviate_url,
-            api_key=settings.weaviate_api_key,
-            class_name=settings.weaviate_class_name,
+async def get_qdrant_manager():
+    """Lazy load Qdrant manager."""
+    global _qdrant_manager
+    if _qdrant_manager is None:
+        _qdrant_manager = AsyncQdrantManager(
+            url=settings.qdrant_url,
+            collection_name=settings.qdrant_collection_name,
             embedding_model=settings.openrouter_embedding_model,
         )
-        await _weaviate_manager.connect()
-        await _weaviate_manager.create_schema()
-    return _weaviate_manager
+        await _qdrant_manager.connect()
+        await _qdrant_manager.create_collection()
+    return _qdrant_manager
 
 
 async def get_agent(model: Optional[str] = None, temperature: float = 0.7):
@@ -120,7 +118,7 @@ async def get_agent(model: Optional[str] = None, temperature: float = 0.7):
     global _agent
     if _agent is None:
         llm = await get_llm_client()
-        retriever = await get_weaviate_manager()
+        retriever = await get_qdrant_manager()
         config = AgentConfig(
             max_iterations=settings.max_iterations,
             memory_size=settings.memory_size,
@@ -135,9 +133,8 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown."""
     logger.info("Starting Agentic RAG API...")
     try:
-        # Initialize managers
         llm = await get_llm_client()
-        weaviate = await get_weaviate_manager()
+        qdrant = await get_qdrant_manager()
         logger.info("Initialization complete")
     except Exception as e:
         logger.error(f"Startup failed: {e}")
@@ -147,10 +144,10 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down...")
-    global _weaviate_manager, _llm_client, _agent
+    global _qdrant_manager, _llm_client, _agent
     
-    if _weaviate_manager:
-        await _weaviate_manager.close()
+    if _qdrant_manager:
+        await _qdrant_manager.close()
     
     if _llm_client:
         await _llm_client.close()
@@ -165,12 +162,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Agentic RAG API",
-    description="Production-ready RAG system with agents",
+    description="Production-ready RAG system with agents using Qdrant and OpenRouter",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -188,16 +184,16 @@ app.add_middleware(
 async def health_check():
     """Check system health."""
     try:
-        weaviate = await get_weaviate_manager()
+        qdrant = await get_qdrant_manager()
         llm = await get_llm_client()
         
         stats = {}
-        if weaviate:
-            stats = await weaviate.get_stats()
+        if qdrant:
+            stats = await qdrant.get_stats()
         
         return HealthResponse(
             status="healthy",
-            weaviate=stats,
+            qdrant=stats,
             llm_client="openrouter",
         )
     except Exception as e:
@@ -209,8 +205,8 @@ async def health_check():
 async def get_stats():
     """Get system statistics."""
     try:
-        weaviate = await get_weaviate_manager()
-        stats = await weaviate.get_stats()
+        qdrant = await get_qdrant_manager()
+        stats = await qdrant.get_stats()
         return stats
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
@@ -225,7 +221,7 @@ async def get_stats():
 async def search_knowledge_base(request: SearchRequest):
     """Search the knowledge base."""
     try:
-        retriever = await get_weaviate_manager()
+        retriever = await get_qdrant_manager()
         
         results = await retriever.hybrid_search(
             query=request.query,
@@ -260,14 +256,7 @@ async def search_knowledge_base(request: SearchRequest):
 
 @app.post("/query", response_model=QueryResponse)
 async def agentic_query(request: QueryRequest):
-    """
-    Run agentic RAG query.
-    
-    This endpoint:
-    1. Takes user query
-    2. Runs agent loop (retrieve → reason → tool use)
-    3. Returns final answer with sources
-    """
+    """Run agentic RAG query."""
     try:
         agent = await get_agent(
             model=request.model,
@@ -275,14 +264,9 @@ async def agentic_query(request: QueryRequest):
         )
         agent.config.max_iterations = request.max_iterations
         
-        # Run agent
         answer = await agent.run(request.query)
-        
-        # Get sources from memory (simplified)
-        history = agent.get_conversation_history()
         sources = agent.get_sources()
         
-        # Get LLM cost
         llm = await get_llm_client()
         cost = getattr(llm, "total_cost", None)
         
@@ -305,33 +289,11 @@ async def agentic_query(request: QueryRequest):
 
 @app.websocket("/ws/query")
 async def websocket_query(websocket: WebSocket):
-    """
-    WebSocket endpoint for streaming agent responses.
-    
-    Message format:
-    ```json
-    {
-        "type": "query",
-        "payload": {
-            "query": "What is X?",
-            "model": "openai/gpt-4-turbo-preview"  // Optional, uses OPENROUTER_LLM_MODEL from env if not specified
-        }
-    }
-    ```
-    
-    Response format:
-    ```json
-    {
-        "type": "thinking" | "tool_use" | "answer",
-        "content": "..."
-    }
-    ```
-    """
+    """WebSocket endpoint for streaming agent responses."""
     await websocket.accept()
     
     try:
         while True:
-            # Receive message
             msg = await websocket.receive_text()
             data = json.loads(msg)
             
@@ -350,19 +312,15 @@ async def websocket_query(websocket: WebSocket):
                 })
                 continue
             
-            # Run agent and stream responses
             agent = await get_agent()
             
-            # Send thinking
             await websocket.send_json({
                 "type": "thinking",
                 "content": f"Processing query: {query}",
             })
             
-            # Run agent (in real implementation, hook into agent internals for streaming)
             answer = await agent.run(query)
             
-            # Send answer
             await websocket.send_json({
                 "type": "answer",
                 "content": answer,
@@ -385,24 +343,9 @@ async def websocket_query(websocket: WebSocket):
 
 @app.post("/documents/index")
 async def index_documents(documents: list[dict]):
-    """
-    Index documents into Weaviate.
-    
-    Expected format:
-    ```json
-    [
-        {
-            "id": "doc-1",
-            "content": "...",
-            "source": "file.pdf",
-            "chunk_id": 0,
-            "metadata": {...}
-        }
-    ]
-    ```
-    """
+    """Index documents into Qdrant."""
     try:
-        retriever = await get_weaviate_manager()
+        retriever = await get_qdrant_manager()
         count = await retriever.upsert_documents(documents)
         
         return {
@@ -419,7 +362,7 @@ async def index_documents(documents: list[dict]):
 async def delete_documents(source: str):
     """Delete all documents from a source."""
     try:
-        retriever = await get_weaviate_manager()
+        retriever = await get_qdrant_manager()
         count = await retriever.delete_by_source(source)
         
         return {
@@ -430,7 +373,6 @@ async def delete_documents(source: str):
     except Exception as e:
         logger.error(f"Deletion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 # ============================================================================
