@@ -1,7 +1,3 @@
-"""
-Search and retrieval endpoints for Agentic RAG API.
-"""
-
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -16,7 +12,6 @@ router = APIRouter()
 
 @router.post("/search", response_model=SearchResponse)
 async def search_knowledge_base(request: SearchRequest):
-    """Search the knowledge base."""
     try:
         retriever = await get_qdrant_manager()
 

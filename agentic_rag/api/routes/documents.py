@@ -1,7 +1,3 @@
-"""
-Document management endpoints for Agentic RAG API.
-"""
-
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -15,7 +11,6 @@ router = APIRouter()
 
 @router.post("/documents/index")
 async def index_documents(documents: list[dict]):
-    """Index documents into Qdrant."""
     try:
         retriever = await get_qdrant_manager()
         count = await retriever.upsert_documents(documents)
@@ -32,7 +27,6 @@ async def index_documents(documents: list[dict]):
 
 @router.delete("/documents/{source}")
 async def delete_documents(source: str):
-    """Delete all documents from a source."""
     try:
         retriever = await get_qdrant_manager()
         count = await retriever.delete_by_source(source)

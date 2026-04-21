@@ -1,16 +1,13 @@
-"""
-File upload endpoints for Agentic RAG API.
-"""
-
 import logging
 import os
 import tempfile
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from ..dependencies import get_qdrant_manager
-from ..models import FileUploadResponse, FilesUploadResponse
 from agentic_rag.utils.file_parser import process_file_to_documents
+
+from ..dependencies import get_qdrant_manager
+from ..models import FilesUploadResponse, FileUploadResponse
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +22,7 @@ async def upload_file(
     chunk_size: int = Form(default=500),
     chunk_overlap: int = Form(default=50),
 ):
-    """Upload and index a single file."""
     try:
-        # Validate file type
         file_ext = os.path.splitext(file.filename)[1].lower()
 
         if file_ext not in ALLOWED_EXTENSIONS:
@@ -36,14 +31,12 @@ async def upload_file(
                 detail=f"File type {file_ext} not supported. Allowed: {ALLOWED_EXTENSIONS}",
             )
 
-        # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
             content = await file.read()
             tmp_file.write(content)
             tmp_path = tmp_file.name
 
         try:
-            # Process file into documents
             documents = process_file_to_documents(
                 file_path=tmp_path,
                 source_name=file.filename,
@@ -51,7 +44,6 @@ async def upload_file(
                 chunk_overlap=chunk_overlap,
             )
 
-            # Index documents
             retriever = await get_qdrant_manager()
             count = await retriever.upsert_documents(documents)
 
@@ -62,7 +54,6 @@ async def upload_file(
                 chunks=len(documents),
             )
         finally:
-            # Clean up temp file
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
@@ -79,7 +70,6 @@ async def upload_files_batch(
     chunk_size: int = Form(default=500),
     chunk_overlap: int = Form(default=50),
 ):
-    """Upload and index multiple files at once."""
     try:
         details = []
         total_documents = 0
@@ -99,7 +89,6 @@ async def upload_files_batch(
                 continue
 
             try:
-                # Save uploaded file temporarily
                 with tempfile.NamedTemporaryFile(
                     delete=False, suffix=file_ext
                 ) as tmp_file:
@@ -108,7 +97,6 @@ async def upload_files_batch(
                     tmp_path = tmp_file.name
 
                 try:
-                    # Process file into documents
                     documents = process_file_to_documents(
                         file_path=tmp_path,
                         source_name=file.filename,
@@ -116,7 +104,6 @@ async def upload_files_batch(
                         chunk_overlap=chunk_overlap,
                     )
 
-                    # Index documents
                     retriever = await get_qdrant_manager()
                     count = await retriever.upsert_documents(documents)
 
@@ -132,7 +119,6 @@ async def upload_files_batch(
                     total_documents += count
                     files_processed += 1
                 finally:
-                    # Clean up temp file
                     if os.path.exists(tmp_path):
                         os.unlink(tmp_path)
             except Exception as e:
@@ -159,7 +145,6 @@ async def upload_files_batch(
 
 @router.delete("/files/{filename}")
 async def delete_file(filename: str):
-    """Delete all documents from a specific file."""
     try:
         retriever = await get_qdrant_manager()
         count = await retriever.delete_by_source(filename)

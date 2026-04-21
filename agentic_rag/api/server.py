@@ -1,9 +1,5 @@
-"""
-Complete FastAPI server for Agentic RAG system.
-Uses Qdrant vector database with OpenRouter for embeddings and LLM.
-"""
-
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -12,7 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from agentic_rag.config import settings
 
 from .dependencies import cleanup_resources, get_llm_client, get_qdrant_manager
-from .routes import documents_router, files_router, health_router, query_router, search_router
+from .routes import (
+    documents_router,
+    files_router,
+    health_router,
+    query_router,
+    search_router,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -20,7 +22,6 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for startup and shutdown."""
     logger.info("Starting Agentic RAG API...")
     try:
         llm = await get_llm_client()
@@ -32,19 +33,14 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown
     logger.info("Shutting down...")
     await cleanup_resources()
     logger.info("Shutdown complete")
 
 
-# ============================================================================
-# FastAPI Application
-# ============================================================================
-
 app = FastAPI(
     title="Agentic RAG API",
-    description="Production-ready RAG system with agents using Qdrant and OpenRouter",
+    description="RAG system with agents using Qdrant and OpenRouter",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -57,17 +53,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
 app.include_router(health_router, prefix="/api/v1", tags=["Health"])
 app.include_router(search_router, prefix="/api/v1", tags=["Search"])
 app.include_router(query_router, prefix="/api/v1", tags=["Query"])
 app.include_router(documents_router, prefix="/api/v1", tags=["Documents"])
 app.include_router(files_router, prefix="/api/v1", tags=["Files"])
-
-
-# ============================================================================
-# Root Endpoint
-# ============================================================================
 
 
 @app.get("/")
@@ -92,11 +82,9 @@ async def root():
     }
 
 
-# ============================================================================
-# Run Server
-# ============================================================================
-
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app, host="0.0.0.0", port=8000, logger_level=os.getenv("LOG_LEVEL", "debug")
+    )

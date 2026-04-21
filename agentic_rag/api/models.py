@@ -1,15 +1,9 @@
-"""
-Pydantic models for Agentic RAG API.
-"""
-
 from typing import Optional
 
 from pydantic import BaseModel
 
 
 class QueryRequest(BaseModel):
-    """Request body for RAG query."""
-
     query: str
     model: Optional[str] = None
     temperature: Optional[float] = 0.7
@@ -18,8 +12,6 @@ class QueryRequest(BaseModel):
 
 
 class QueryResponse(BaseModel):
-    """Response body for RAG query."""
-
     query: str
     answer: str
     sources: Optional[list[dict]] = None
@@ -28,16 +20,12 @@ class QueryResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """Request for knowledge base search."""
-
     query: str
     limit: Optional[int] = 10
     alpha: Optional[float] = 0.5
 
 
 class SearchResult(BaseModel):
-    """Single search result."""
-
     content: str
     source: str
     chunk_id: int
@@ -45,16 +33,12 @@ class SearchResult(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    """Response for search."""
-
     query: str
     results: list[SearchResult]
     count: int
 
 
 class FileUploadResponse(BaseModel):
-    """Response for file upload."""
-
     status: str
     filename: str
     documents_indexed: int
@@ -62,8 +46,6 @@ class FileUploadResponse(BaseModel):
 
 
 class FilesUploadResponse(BaseModel):
-    """Response for multiple files upload."""
-
     status: str
     files_processed: int
     total_documents_indexed: int
@@ -71,8 +53,6 @@ class FilesUploadResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """Health check response."""
-
     status: str
     qdrant: dict
     llm_client: str = "openrouter"

@@ -1,7 +1,3 @@
-"""
-Health and status endpoints for Agentic RAG API.
-"""
-
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -16,7 +12,6 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Check system health."""
     try:
         qdrant = await get_qdrant_manager()
         llm = await get_llm_client()
@@ -37,7 +32,6 @@ async def health_check():
 
 @router.get("/stats")
 async def get_stats():
-    """Get system statistics."""
     try:
         qdrant = await get_qdrant_manager()
         stats = await qdrant.get_stats()

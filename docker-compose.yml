@@ -1,5 +1,4 @@
 services:
-  # Qdrant Vector Database (optional - can use in-memory mode)
   qdrant:
     image: qdrant/qdrant:v1.13.3
     container_name: qdrant
@@ -13,7 +12,6 @@ services:
     networks:
       - agentic-rag
 
-  # Python API Service
   api:
     build:
       context: .
@@ -22,16 +20,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # OpenRouter API Key - REQUIRED (set this in your .env file)
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      # Optional model configurations with defaults
       - OPENROUTER_LLM_MODEL=${OPENROUTER_LLM_MODEL}
       - OPENROUTER_EMBEDDING_MODEL=${OPENROUTER_EMBEDDING_MODEL}
-      # Qdrant configuration
       - QDRANT_URL=${QDRANT_URL}
       - QDRANT_COLLECTION_NAME=${QDRANT_COLLECTION_NAME}
       - QDRANT_MODE=${QDRANT_MODE}
-      # Application settings
       - LOG_LEVEL=${LOG_LEVEL}
       - MAX_ITERATIONS=${MAX_ITERATIONS}
       - TEMPERATURE=${TEMPERATURE}

@@ -1,7 +1,3 @@
-"""
-Agentic RAG query endpoints for Agentic RAG API.
-"""
-
 import asyncio
 import json
 import logging
@@ -18,7 +14,6 @@ router = APIRouter()
 
 @router.post("/query", response_model=QueryResponse)
 async def agentic_query(request: QueryRequest):
-    """Run agentic RAG query."""
     try:
         agent = await get_agent(
             model=request.model,
@@ -51,7 +46,6 @@ async def agentic_query(request: QueryRequest):
 
 @router.websocket("/ws/query")
 async def websocket_query(websocket: WebSocket):
-    """WebSocket endpoint for streaming agent responses."""
     await websocket.accept()
 
     try:

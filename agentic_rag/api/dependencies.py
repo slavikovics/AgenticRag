@@ -1,7 +1,3 @@
-"""
-Dependencies and global state management for Agentic RAG API.
-"""
-
 import logging
 from typing import Optional
 
@@ -12,14 +8,12 @@ from agentic_rag.qdrant.async_manager import AsyncQdrantManager
 
 logger = logging.getLogger(__name__)
 
-# Global state
 _llm_client = None
 _qdrant_manager = None
 _agent = None
 
 
 async def get_llm_client():
-    """Lazy load LLM client."""
     global _llm_client
     if _llm_client is None:
         config = OpenRouterConfig(
@@ -33,10 +27,8 @@ async def get_llm_client():
 
 
 async def get_qdrant_manager():
-    """Lazy load Qdrant manager."""
     global _qdrant_manager
     if _qdrant_manager is None:
-        # Get API key from settings (which reads from environment)
         api_key = settings.openrouter_api_key
         _qdrant_manager = AsyncQdrantManager(
             url=settings.qdrant_url,
@@ -50,7 +42,6 @@ async def get_qdrant_manager():
 
 
 async def get_agent(model: Optional[str] = None, temperature: float = 0.7):
-    """Get or create agent."""
     global _agent
     if _agent is None:
         llm = await get_llm_client()
@@ -65,7 +56,6 @@ async def get_agent(model: Optional[str] = None, temperature: float = 0.7):
 
 
 async def cleanup_resources():
-    """Clean up all global resources."""
     global _qdrant_manager, _llm_client, _agent
 
     if _qdrant_manager:

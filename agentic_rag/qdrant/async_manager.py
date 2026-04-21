@@ -1,8 +1,3 @@
-"""
-Async Qdrant vector database manager.
-Uses OpenRouter for embeddings.
-"""
-
 import asyncio
 import logging
 import os
@@ -25,8 +20,6 @@ logger = logging.getLogger(__name__)
 
 
 class AsyncOpenRouterEmbedding:
-    """Async generate embeddings using OpenRouter API."""
-
     def __init__(self, api_key: str, model: str = "openai/text-embedding-3-small"):
         if not api_key:
             raise ValueError("OpenRouter API key is required for embeddings")
@@ -108,8 +101,6 @@ class AsyncOpenRouterEmbedding:
 
 
 class AsyncQdrantManager:
-    """Async Manager for Qdrant vector database operations."""
-
     def __init__(
         self,
         url: str = "http://localhost:6333",
@@ -123,9 +114,8 @@ class AsyncQdrantManager:
         self.client: Optional[QdrantClient] = None
         self._connected = False
         self._embedder: Optional[AsyncOpenRouterEmbedding] = None
-        self._embedding_dim: Optional[int] = None  # Will be detected dynamically
+        self._embedding_dim: Optional[int] = None
 
-        # Use provided api_key or get from environment
         openrouter_api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not openrouter_api_key:
             logger.error(
@@ -141,7 +131,6 @@ class AsyncQdrantManager:
 
     async def connect(self) -> None:
         try:
-            # Check if we should use in-memory mode (for development/testing without Docker)
             qdrant_mode = os.getenv("QDRANT_MODE", "remote").lower()
             use_memory = (
                 qdrant_mode == "memory"
@@ -171,7 +160,6 @@ class AsyncQdrantManager:
     async def create_collection(self) -> None:
         await self.ensure_connected()
         try:
-            # Detect embedding dimension first
             if self._embedding_dim is None and self._embedder:
                 logger.info("Detecting embedding dimension...")
                 test_vector = await self._embedder.embed_text("test")
@@ -184,7 +172,6 @@ class AsyncQdrantManager:
             collection_names = [c.name for c in collections.collections]
 
             if self.collection_name in collection_names:
-                # Check if existing collection has correct dimension
                 collection_info = self.client.get_collection(self.collection_name)
                 existing_dim = collection_info.config.params.vectors.size
 
@@ -368,7 +355,6 @@ class AsyncQdrantManager:
         await self.ensure_connected()
         try:
             info = self.client.get_collection(self.collection_name)
-            # Handle both server and in-memory modes
             vectors_count = getattr(info, "vectors_count", None) or getattr(
                 info, "points_count", 0
             )
