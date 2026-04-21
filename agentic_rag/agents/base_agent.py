@@ -219,7 +219,7 @@ Important:
                             "arguments": args,
                         },
                     )
-                    preview = result[:500] + "..." if len(result) > 500 else result
+                    preview = result
                     await self._emit(
                         on_event,
                         EventType.TOOL_RESULT,
