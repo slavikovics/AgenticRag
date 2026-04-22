@@ -38,6 +38,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./data:/app/data
+      - ./documents:/app/documents
 
 volumes:
   qdrant_storage:

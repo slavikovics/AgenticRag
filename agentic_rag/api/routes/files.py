@@ -211,6 +211,8 @@ async def upload_files_from_directory(
                     }
                 )
 
+                logger.info(f"File {os.path.basename(file_path)} uploaded successfully")
+
                 total_documents += count
                 files_processed += 1
             except Exception as e:

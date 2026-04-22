@@ -18,6 +18,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+documents/
+data
 
 # Environment
 .venv
