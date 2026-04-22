@@ -1,8 +1,3 @@
-"""
-File parsing utilities for Agentic RAG system.
-Supports PDF, TXT, MD, and other text-based formats.
-"""
-
 import os
 import logging
 from typing import List, Dict, Any
@@ -12,12 +7,10 @@ logger = logging.getLogger(__name__)
 
 
 def parse_text_file(file_path: str) -> str:
-    """Parse plain text files."""
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             return f.read()
     except UnicodeDecodeError:
-        # Try with latin-1 encoding as fallback
         with open(file_path, 'r', encoding='latin-1') as f:
             return f.read()
     except Exception as e:
@@ -26,7 +19,6 @@ def parse_text_file(file_path: str) -> str:
 
 
 def parse_pdf_file(file_path: str) -> str:
-    """Parse PDF files using pypdf."""
     try:
         from pypdf import PdfReader
         
@@ -48,12 +40,10 @@ def parse_pdf_file(file_path: str) -> str:
 
 
 def parse_markdown_file(file_path: str) -> str:
-    """Parse Markdown files."""
     return parse_text_file(file_path)
 
 
 def parse_csv_file(file_path: str) -> str:
-    """Parse CSV files."""
     try:
         import csv
         
@@ -61,7 +51,6 @@ def parse_csv_file(file_path: str) -> str:
             reader = csv.reader(f)
             rows = list(reader)
             
-        # Convert to simple text format
         text_rows = []
         for row in rows:
             text_rows.append(", ".join(row))
@@ -73,14 +62,12 @@ def parse_csv_file(file_path: str) -> str:
 
 
 def parse_json_file(file_path: str) -> str:
-    """Parse JSON files."""
     try:
         import json
         
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        # Convert JSON to readable text
         if isinstance(data, dict):
             text_parts = []
             for key, value in data.items():
@@ -96,7 +83,6 @@ def parse_json_file(file_path: str) -> str:
 
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
-    """Split text into overlapping chunks."""
     if not text:
         return []
     
@@ -106,9 +92,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
     while start < len(text):
         end = start + chunk_size
         
-        # Try to break at sentence boundary
         if end < len(text):
-            # Look for sentence endings
             for sep in ['. ', '\n', '! ', '? ']:
                 last_sep = text[start:end].rfind(sep)
                 if last_sep > chunk_size // 2:
@@ -125,7 +109,6 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
 
 
 def parse_file(file_path: str) -> str:
-    """Parse a file based on its extension."""
     path = Path(file_path)
     ext = path.suffix.lower()
     
@@ -141,7 +124,6 @@ def parse_file(file_path: str) -> str:
     
     parser = parsers.get(ext)
     if not parser:
-        # Default to text parser
         logger.warning(f"No specific parser for {ext}, using text parser")
         parser = parse_text_file
     
@@ -154,17 +136,12 @@ def process_file_to_documents(
     chunk_size: int = 500,
     chunk_overlap: int = 50,
 ) -> List[Dict[str, Any]]:
-    """Process a file into documents ready for indexing."""
     if source_name is None:
         source_name = Path(file_path).name
     
-    # Parse file content
     content = parse_file(file_path)
-    
-    # Chunk the content
     chunks = chunk_text(content, chunk_size=chunk_size, overlap=chunk_overlap)
     
-    # Create document objects
     documents = []
     for idx, chunk in enumerate(chunks):
         doc = {
