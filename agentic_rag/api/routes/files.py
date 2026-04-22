@@ -166,6 +166,7 @@ async def upload_files_from_directory(
     chunk_size: int = Form(default=500),
     chunk_overlap: int = Form(default=50),
     recursive: bool = Form(default=False),
+    min_chunks_count: int = Form(default=300),
 ):
     try:
         if not os.path.exists(directory_path) or not os.path.isdir(directory_path):
@@ -187,9 +188,19 @@ async def upload_files_from_directory(
                     if file_ext in ALLOWED_EXTENSIONS:
                         files_to_process.append(file_path)
 
+        if not files_to_process:
+            return {
+                "status": "completed",
+                "files_processed": 0,
+                "total_documents_indexed": 0,
+                "details": [],
+                "message": "No supported files found",
+            }
+
+        all_documents = []
         details = []
-        total_documents = 0
         files_processed = 0
+        total_documents_indexed = 0
 
         for file_path in files_to_process:
             try:
@@ -200,22 +211,38 @@ async def upload_files_from_directory(
                     chunk_overlap=chunk_overlap,
                 )
 
-                retriever = await get_qdrant_manager()
-                count = await retriever.upsert_documents(documents)
+                all_documents.extend(documents)
 
                 details.append(
                     {
                         "filename": os.path.basename(file_path),
-                        "status": "success",
-                        "documents_indexed": count,
+                        "status": "collected",
+                        "chunks": len(documents),
                     }
                 )
 
-                logger.info(f"File {os.path.basename(file_path)} uploaded successfully")
+                if len(all_documents) >= min_chunks_count:
+                    retriever = await get_qdrant_manager()
+                    count = await retriever.upsert_documents(all_documents)
 
-                total_documents += count
-                files_processed += 1
+                    total_documents_indexed += count
+                    files_processed += len(
+                        [d for d in details if d["status"] == "processed"]
+                    )
+
+                    for detail in details:
+                        if detail["status"] == "collected":
+                            detail["status"] = "processed"
+                            detail["documents_indexed"] = count
+
+                    logger.info(
+                        f"Processed {count} documents from {files_processed} files"
+                    )
+
+                    all_documents = []
+
             except Exception as e:
+                logger.error(f"Failed to process file {file_path}: {e}")
                 details.append(
                     {
                         "filename": os.path.basename(file_path),
@@ -224,10 +251,22 @@ async def upload_files_from_directory(
                     }
                 )
 
+        if all_documents:
+            retriever = await get_qdrant_manager()
+            count = await retriever.upsert_documents(all_documents)
+            total_documents_indexed += count
+            files_processed += len([d for d in details if d["status"] == "collected"])
+
+            for detail in details:
+                if detail["status"] == "collected":
+                    detail["status"] = "processed"
+                    detail["documents_indexed"] = count
+
         return {
             "status": "completed",
             "files_processed": files_processed,
-            "total_documents_indexed": total_documents,
+            "total_documents_indexed": total_documents_indexed,
+            "min_chunks_required": min_chunks_count,
             "details": details,
         }
 
