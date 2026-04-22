@@ -158,3 +158,79 @@ async def delete_file(filename: str):
     except Exception as e:
         logger.error(f"File deletion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/files/upload-from-directory")
+async def upload_files_from_directory(
+    directory_path: str = Form(...),
+    chunk_size: int = Form(default=500),
+    chunk_overlap: int = Form(default=50),
+    recursive: bool = Form(default=False),
+):
+    try:
+        if not os.path.exists(directory_path) or not os.path.isdir(directory_path):
+            raise HTTPException(status_code=400, detail="Invalid directory path")
+
+        files_to_process = []
+
+        if recursive:
+            for root, _, files in os.walk(directory_path):
+                for file in files:
+                    file_ext = os.path.splitext(file)[1].lower()
+                    if file_ext in ALLOWED_EXTENSIONS:
+                        files_to_process.append(os.path.join(root, file))
+        else:
+            for file in os.listdir(directory_path):
+                file_path = os.path.join(directory_path, file)
+                if os.path.isfile(file_path):
+                    file_ext = os.path.splitext(file)[1].lower()
+                    if file_ext in ALLOWED_EXTENSIONS:
+                        files_to_process.append(file_path)
+
+        details = []
+        total_documents = 0
+        files_processed = 0
+
+        for file_path in files_to_process:
+            try:
+                documents = process_file_to_documents(
+                    file_path=file_path,
+                    source_name=os.path.basename(file_path),
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                )
+
+                retriever = await get_qdrant_manager()
+                count = await retriever.upsert_documents(documents)
+
+                details.append(
+                    {
+                        "filename": os.path.basename(file_path),
+                        "status": "success",
+                        "documents_indexed": count,
+                    }
+                )
+
+                total_documents += count
+                files_processed += 1
+            except Exception as e:
+                details.append(
+                    {
+                        "filename": os.path.basename(file_path),
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                )
+
+        return {
+            "status": "completed",
+            "files_processed": files_processed,
+            "total_documents_indexed": total_documents,
+            "details": details,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Directory upload failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
