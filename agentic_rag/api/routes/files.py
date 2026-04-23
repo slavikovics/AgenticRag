@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import tempfile
@@ -167,26 +168,27 @@ async def upload_files_from_directory(
     chunk_overlap: int = Form(default=50),
     recursive: bool = Form(default=False),
     min_chunks_count: int = Form(default=300),
+    max_concurrent_uploads: int = Form(default=50),  # new param
 ):
     try:
         if not os.path.exists(directory_path) or not os.path.isdir(directory_path):
             raise HTTPException(status_code=400, detail="Invalid directory path")
 
+        # --- Collect files ---
         files_to_process = []
-
         if recursive:
             for root, _, files in os.walk(directory_path):
                 for file in files:
-                    file_ext = os.path.splitext(file)[1].lower()
-                    if file_ext in ALLOWED_EXTENSIONS:
+                    if os.path.splitext(file)[1].lower() in ALLOWED_EXTENSIONS:
                         files_to_process.append(os.path.join(root, file))
         else:
             for file in os.listdir(directory_path):
                 file_path = os.path.join(directory_path, file)
-                if os.path.isfile(file_path):
-                    file_ext = os.path.splitext(file)[1].lower()
-                    if file_ext in ALLOWED_EXTENSIONS:
-                        files_to_process.append(file_path)
+                if (
+                    os.path.isfile(file_path)
+                    and os.path.splitext(file)[1].lower() in ALLOWED_EXTENSIONS
+                ):
+                    files_to_process.append(file_path)
 
         if not files_to_process:
             return {
@@ -197,10 +199,9 @@ async def upload_files_from_directory(
                 "message": "No supported files found",
             }
 
-        all_documents = []
+        # --- Process each file into chunks (CPU-bound, keep sequential) ---
+        all_chunks: list[tuple[str, list]] = []  # (filename, documents)
         details = []
-        files_processed = 0
-        total_documents_indexed = 0
 
         for file_path in files_to_process:
             try:
@@ -210,37 +211,7 @@ async def upload_files_from_directory(
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
                 )
-
-                all_documents.extend(documents)
-
-                details.append(
-                    {
-                        "filename": os.path.basename(file_path),
-                        "status": "collected",
-                        "chunks": len(documents),
-                    }
-                )
-
-                if len(all_documents) >= min_chunks_count:
-                    retriever = await get_qdrant_manager()
-                    count = await retriever.upsert_documents(all_documents)
-
-                    total_documents_indexed += count
-                    files_processed += len(
-                        [d for d in details if d["status"] == "processed"]
-                    )
-
-                    for detail in details:
-                        if detail["status"] == "collected":
-                            detail["status"] = "processed"
-                            detail["documents_indexed"] = count
-
-                    logger.info(
-                        f"Processed {count} documents from {files_processed} files"
-                    )
-
-                    all_documents = []
-
+                all_chunks.append((os.path.basename(file_path), documents))
             except Exception as e:
                 logger.error(f"Failed to process file {file_path}: {e}")
                 details.append(
@@ -251,22 +222,64 @@ async def upload_files_from_directory(
                     }
                 )
 
-        if all_documents:
-            retriever = await get_qdrant_manager()
-            count = await retriever.upsert_documents(all_documents)
-            total_documents_indexed += count
-            files_processed += len([d for d in details if d["status"] == "collected"])
+        # --- Build batches of min_chunks_count ---
+        batches: list[list[tuple[str, list]]] = []
+        current_batch: list[tuple[str, list]] = []
+        current_batch_size = 0
 
-            for detail in details:
-                if detail["status"] == "collected":
-                    detail["status"] = "processed"
-                    detail["documents_indexed"] = count
+        for filename, documents in all_chunks:
+            current_batch.append((filename, documents))
+            current_batch_size += len(documents)
+            if current_batch_size >= min_chunks_count:
+                batches.append(current_batch)
+                current_batch = []
+                current_batch_size = 0
+
+        if current_batch:
+            batches.append(current_batch)
+
+        # --- Upload batches concurrently ---
+        semaphore = asyncio.Semaphore(max_concurrent_uploads)
+        total_documents_indexed = 0
+        files_processed = 0
+
+        async def upload_batch(batch: list[tuple[str, list]]) -> dict:
+            async with semaphore:
+                batch_docs = [doc for _, docs in batch for doc in docs]
+                filenames = [fname for fname, _ in batch]
+                try:
+                    retriever = await get_qdrant_manager()
+                    count = await retriever.upsert_documents(batch_docs)
+                    logger.info(
+                        f"Uploaded batch of {count} docs from {len(filenames)} files"
+                    )
+                    return {"filenames": filenames, "count": count, "error": None}
+                except Exception as e:
+                    logger.error(f"Batch upload failed for {filenames}: {e}")
+                    return {"filenames": filenames, "count": 0, "error": str(e)}
+
+        results = await asyncio.gather(*[upload_batch(b) for b in batches])
+
+        # --- Collate results into details ---
+        for result in results:
+            files_processed += len(result["filenames"])
+            total_documents_indexed += result["count"]
+            for fname in result["filenames"]:
+                details.append(
+                    {
+                        "filename": fname,
+                        "status": "processed" if not result["error"] else "failed",
+                        "documents_indexed": result["count"],
+                        **({"error": result["error"]} if result["error"] else {}),
+                    }
+                )
 
         return {
             "status": "completed",
             "files_processed": files_processed,
             "total_documents_indexed": total_documents_indexed,
             "min_chunks_required": min_chunks_count,
+            "batches_uploaded": len(batches),
             "details": details,
         }
 
