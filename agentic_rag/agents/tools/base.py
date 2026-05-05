@@ -1,3 +1,7 @@
+"""
+tools/base.py — tool definition and type enum.
+"""
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable

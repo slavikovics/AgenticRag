@@ -1,351 +1,391 @@
+"""
+agent.py — AgenticRAG loop and session context manager.
+"""
+
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Optional
 
 from .config import AgentConfig
+from .events import AgentEvent, EventType
 from .memory import ConversationMemory
-from .tools.definitions import ToolDefinition, ToolType
+from .tools.base import ToolDefinition, ToolType
+from .tools.retrieval import GENERAL_COLLECTION, handle_retrieve
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+
+_SYSTEM_PROMPT_TEMPLATE = """\
+You are an AI assistant helping prospective university students in Belarus \
+find information about universities, admissions, dormitories, tuition, and student life.
+
+You have access to a knowledge base split into separate collections — \
+one per university, plus a general collection with aggregated statistics.
+
+Available collections:
+{collections_desc}
+
+Guidelines:
+1. For questions about a specific university — identify it and use that collection.
+2. For general questions about the Belarusian education system or comparisons — use "{general}".
+3. If unsure which university the user means, search "{general}" first, then follow up.
+4. You may call retrieve_documents multiple times with different collections.
+5. Always cite the source URL when referencing retrieved content.
+6. If nothing relevant is found locally, use web_search as a fallback.
+
+Available tools:
+{tools_desc}
+"""
 
 
 class AgenticRAG:
+    """
+    Agentic RAG loop with tool use, event streaming, and per-run memory.
+
+    Memory is scoped to each run() call — the agent singleton is safe
+    to reuse across concurrent requests.
+    """
+
     def __init__(
         self,
-        llm_client,
+        llm,
         retriever,
         config: Optional[AgentConfig] = None,
+        collection_descriptions: Optional[dict[str, dict]] = None,
     ):
-        self.llm = llm_client
+        self.llm = llm
         self.retriever = retriever
         self.config = config or AgentConfig()
-
-        self.tools: Dict[str, ToolDefinition] = {}
-        self.memory = ConversationMemory(max_messages=self.config.memory_size)
-
+        # collection_descriptions: { slug: { display_name, description } }
+        self._collection_descriptions: dict[str, dict] = collection_descriptions or {}
+        self.tools: dict[str, ToolDefinition] = {}
         self._register_default_tools()
+
+    # ── Tool registration ─────────────────────────────────────────────────────
 
     def register_tool(self, tool: ToolDefinition):
         self.tools[tool.name] = tool
-        logger.info(f"Registered tool: {tool.name}")
+        log.info("Registered tool: %s", tool.name)
 
     def _register_default_tools(self):
-        retrieval_tool = ToolDefinition(
-            name="retrieve_documents",
-            description="Search the knowledge base for relevant documents using hybrid search (combines keyword and semantic search)",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query to find relevant documents",
+        collections = self.retriever.list_collections() if self.retriever else []
+        collection_enum = collections if collections else [GENERAL_COLLECTION]
+
+        self.register_tool(
+            ToolDefinition(
+                name="retrieve_documents",
+                description=(
+                    "Search a specific university collection or the general collection. "
+                    "Choose the collection based on which university the user is asking about. "
+                    f"Use '{GENERAL_COLLECTION}' for cross-university or general questions."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query to find relevant documents",
+                        },
+                        "collection": {
+                            "type": "string",
+                            "description": (
+                                f"Collection to search. Use university slug (e.g. 'grsu_by') "
+                                f"or '{GENERAL_COLLECTION}' for general info."
+                            ),
+                            "enum": collection_enum,
+                            "default": GENERAL_COLLECTION,
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of results (default: 5)",
+                            "default": 5,
+                        },
+                        "alpha": {
+                            "type": "number",
+                            "description": "0=keyword only, 1=semantic only (default: 0.5)",
+                            "default": 0.5,
+                            "minimum": 0,
+                            "maximum": 1,
+                        },
                     },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return (default: 5)",
-                        "default": 5,
-                    },
-                    "alpha": {
-                        "type": "number",
-                        "description": "Search balance: 0=keyword search only, 1=semantic search only (default: 0.5)",
-                        "default": 0.5,
-                        "minimum": 0,
-                        "maximum": 1,
-                    },
+                    "required": ["query", "collection"],
                 },
-                "required": ["query"],
-            },
-            type=ToolType.RETRIEVAL,
-            handler=self._handle_retrieve,
-        )
-        self.register_tool(retrieval_tool)
-
-        semantic_tool = ToolDefinition(
-            name="semantic_search",
-            description="Perform pure semantic (vector) search on the knowledge base",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query for semantic matching",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of results (default: 5)",
-                        "default": 5,
-                    },
-                },
-                "required": ["query"],
-            },
-            type=ToolType.RETRIEVAL,
-            handler=self._handle_semantic_search,
-        )
-        self.register_tool(semantic_tool)
-
-    async def _handle_retrieve(
-        self,
-        query: str,
-        limit: int = 5,
-        alpha: float = 0.5,
-    ) -> str:
-        try:
-            results = await self.retriever.hybrid_search(
-                query=query,
-                limit=limit,
-                alpha=alpha,
+                type=ToolType.RETRIEVAL,
+                handler=lambda **kw: handle_retrieve(self.retriever, **kw),
             )
+        )
 
-            if not results:
-                return "No relevant documents found in the knowledge base."
+    # ── System prompt ─────────────────────────────────────────────────────────
 
-            formatted = []
-            for i, result in enumerate(results, 1):
-                source = result.get("source", "Unknown")
-                score = result.get("score", "N/A")
-                content = result.get("content", "")[:1000]  # Limit content length
+    def _build_system_prompt(self) -> str:
+        tools_desc = "\n".join(
+            f"- {t.name}: {t.description}" for t in self.tools.values()
+        )
 
-                formatted.append(
-                    f"Document {i}:\n"
-                    f"Source: {source}\n"
-                    f"Relevance Score: {score}\n"
-                    f"Content: {content}...\n"
-                )
+        collections = self.retriever.list_collections() if self.retriever else []
+        lines = []
+        for slug in sorted(collections):
+            meta = self._collection_descriptions.get(slug, {})
+            display = meta.get("display_name", slug)
+            desc = meta.get("description", "")
+            if desc:
+                lines.append(f'- "{slug}" — {display}: {desc}')
+            else:
+                lines.append(f'- "{slug}" — {display}')
 
-            return "\n---\n".join(formatted)
+        collections_desc = "\n".join(lines) or "  (no collections indexed yet)"
 
-        except Exception as e:
-            logger.error(f"Retrieval failed: {e}")
-            return f"Error performing retrieval: {str(e)}"
+        return _SYSTEM_PROMPT_TEMPLATE.format(
+            collections_desc=collections_desc,
+            general=GENERAL_COLLECTION,
+            tools_desc=tools_desc,
+        )
 
-    async def _handle_semantic_search(
-        self,
-        query: str,
-        limit: int = 5,
-    ) -> str:
-        try:
-            results = await self.retriever.vector_search(
-                query=query,
-                limit=limit,
-            )
+    # ── Tool execution ────────────────────────────────────────────────────────
 
-            if not results:
-                return "No semantically similar documents found."
-
-            formatted = []
-            for i, result in enumerate(results, 1):
-                source = result.get("source", "Unknown")
-                distance = result.get("distance", "N/A")
-                content = result.get("content", "")[:1000]
-
-                formatted.append(
-                    f"Document {i}:\n"
-                    f"Source: {source}\n"
-                    f"Semantic Distance: {distance}\n"
-                    f"Content: {content}...\n"
-                )
-
-            return "\n---\n".join(formatted)
-
-        except Exception as e:
-            logger.error(f"Semantic search failed: {e}")
-            return f"Error performing semantic search: {str(e)}"
-
-    async def execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
+    async def _execute_tool(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         if tool_name not in self.tools:
             return f"Error: Unknown tool '{tool_name}'"
-
-        tool = self.tools[tool_name]
-
         try:
             if self.config.verbose:
-                logger.info(f"Executing tool: {tool_name} with input: {tool_input}")
-
-            result = await tool.handler(**tool_input)
+                log.info("Tool: %s  args: %s", tool_name, tool_input)
+            result = await self.tools[tool_name].handler(**tool_input)
             return str(result)
-
         except Exception as e:
-            logger.error(f"Tool execution failed: {e}")
-            return f"Error executing tool: {str(e)}"
+            log.error("Tool execution failed (%s): %s", tool_name, e)
+            return f"Error executing tool '{tool_name}': {e}"
 
-    async def execute_tools_concurrently(
+    async def _execute_tools_concurrently(
         self,
-        tool_calls: List[Dict[str, Any]],
-    ) -> List[Tuple[str, str, str]]:
-        tasks = []
-        tool_info = []
-
-        for tool_call in tool_calls:
-            tool_call_id = tool_call.get("id", "")
-            function = tool_call.get("function", {})
-            name = function.get("name", "")
-            args_str = function.get("arguments", "{}")
-
+        tool_calls: list[dict[str, Any]],
+    ) -> list[tuple[str, str, str]]:
+        tasks, meta = [], []
+        for tc in tool_calls:
+            tc_id = tc.get("id", "")
+            fn = tc.get("function", {})
+            name = fn.get("name", "")
+            args_str = fn.get("arguments", "{}")
             try:
                 args = json.loads(args_str) if isinstance(args_str, str) else args_str
             except json.JSONDecodeError:
                 args = {}
-
             if name in self.tools:
-                task = self.execute_tool(name, args)
-                tasks.append(task)
-                tool_info.append((tool_call_id, name))
+                tasks.append(self._execute_tool(name, args))
+                meta.append((tc_id, name))
             else:
-                logger.warning(f"Unknown tool requested: {name}")
+                log.warning("Unknown tool requested: %s", name)
 
-        results = await asyncio.gather(
-            *tasks,
-            return_exceptions=True,
-        )
-
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         return [
-            (
-                tool_id,
-                name,
-                str(result)
-                if not isinstance(result, Exception)
-                else f"Error: {result}",
-            )
-            for (tool_id, name), result in zip(tool_info, results)
+            (tc_id, name, str(r) if not isinstance(r, Exception) else f"Error: {r}")
+            for (tc_id, name), r in zip(meta, results)
         ]
 
-    def _build_system_prompt(self) -> str:
-        tools_desc = "\n".join(
-            [f"- {tool.name}: {tool.description}" for tool in self.tools.values()]
-        )
+    # ── Event helpers ─────────────────────────────────────────────────────────
 
-        return f"""You are an AI assistant with access to a knowledge base and tools.
-
-Your task is to answer user questions accurately and helpfully. Follow these guidelines:
-
-1. For questions requiring specific information, use the retrieval tools to search the knowledge base.
-2. Always cite sources when using information from retrieved documents.
-3. If the knowledge base doesn't contain relevant information, be honest about it.
-4. Think step by step about what information you need before using tools.
-
-Available tools:
-{tools_desc}
-
-Important:
-- Use retrieve_documents for general search (combines keyword and semantic search)
-- Use semantic_search when looking for conceptually similar content
-- Always read the retrieved content carefully before answering
-- Be concise but thorough in your responses
-- If a tool returns an error, try a different approach or inform the user"""
-
-    async def _call_llm(
+    async def _emit(
         self,
-        messages: List[Dict[str, Any]],
-    ) -> Tuple[str, Optional[List[Dict[str, Any]]]]:
-        tools = [tool.to_openai_format() for tool in self.tools.values()]
+        on_event: Optional[Callable],
+        event_type: EventType,
+        content: Optional[str] = None,
+        data: Optional[dict[str, Any]] = None,
+    ):
+        if on_event is None:
+            return
+        event = AgentEvent(type=event_type, content=content, data=data)
+        if asyncio.iscoroutinefunction(on_event):
+            await on_event(event)
+        else:
+            on_event(event)
 
-        content, tool_calls = await self.llm.agentic_complete(
-            messages=messages,
-            tools=tools if tools else None,
+    # ── Main loop ─────────────────────────────────────────────────────────────
+
+    async def run(
+        self,
+        user_query: str,
+        on_event: Optional[Callable[[AgentEvent], Any]] = None,
+    ) -> str:
+        """
+        Run one agentic turn. Memory is local to this call — safe for
+        concurrent use of the same agent instance.
+        """
+        log.info("Agent run: %s", user_query)
+
+        # Per-run memory — not shared across concurrent calls
+        memory = ConversationMemory(max_messages=self.config.memory_size)
+
+        await self._emit(
+            on_event,
+            EventType.ITERATION_START,
+            data={
+                "query": user_query,
+                "max_iterations": self.config.max_iterations,
+            },
         )
 
-        return content, tool_calls
-
-    async def run(self, user_query: str) -> str:
-        if self.config.verbose:
-            logger.info(f"Starting agent loop for query: {user_query}")
-
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._build_system_prompt()},
             {"role": "user", "content": user_query},
         ]
+        memory.add_message("user", user_query)
 
-        self.memory.add_message("user", user_query)
-
-        iteration = 0
-        final_answer = None
+        final_answer: Optional[str] = None
 
         try:
-            while iteration < self.config.max_iterations:
-                iteration += 1
-
-                if self.config.verbose:
-                    logger.info(f"Iteration {iteration}/{self.config.max_iterations}")
-
-                response, tool_calls = await self._call_llm(messages)
-
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": response,
-                }
-                if tool_calls:
-                    assistant_msg["tool_calls"] = tool_calls
-
-                messages.append(assistant_msg)
-                self.memory.add_message(
-                    "assistant",
-                    response,
-                    tool_calls=tool_calls,
-                )
-
-                if not tool_calls:
-                    final_answer = response
-                    break
-
-                if self.config.verbose:
-                    logger.info(f"Executing {len(tool_calls)} tools...")
-
-                tool_results = await self.execute_tools_concurrently(tool_calls)
-
-                for tool_call_id, tool_name, result in tool_results:
+            async with asyncio.timeout(self.config.timeout_seconds):
+                for iteration in range(1, self.config.max_iterations + 1):
                     if self.config.verbose:
-                        preview = result[:200] + "..." if len(result) > 200 else result
-                        logger.info(f"Tool {tool_name} result: {preview}")
+                        log.info(
+                            "Iteration %d/%d", iteration, self.config.max_iterations
+                        )
 
-                    tool_msg = {
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": result,
-                    }
-                    messages.append(tool_msg)
+                    response, tool_calls = await self.llm.agentic_complete(
+                        messages=messages,
+                        tools=[t.to_openai_format() for t in self.tools.values()],
+                    )
+                    response = response or ""
 
-                    self.memory.add_message(
-                        "tool",
-                        result,
-                        tool_call_id=tool_call_id,
-                        name=tool_name,
+                    await self._emit(
+                        on_event,
+                        EventType.LLM_RESPONSE,
+                        content=response,
+                        data={
+                            "iteration": iteration,
+                            "has_tool_calls": bool(tool_calls),
+                            "tool_call_count": len(tool_calls) if tool_calls else 0,
+                        },
                     )
 
+                    assistant_msg: dict[str, Any] = {
+                        "role": "assistant",
+                        "content": response,
+                    }
+                    if tool_calls:
+                        assistant_msg["tool_calls"] = tool_calls
+                    messages.append(assistant_msg)
+                    memory.add_message("assistant", response, tool_calls=tool_calls)
+
+                    if not tool_calls:
+                        final_answer = response
+                        break
+
+                    # Emit TOOL_CALL events before execution
+                    for tc in tool_calls:
+                        fn = tc.get("function", {})
+                        try:
+                            args = json.loads(fn.get("arguments", "{}"))
+                        except json.JSONDecodeError:
+                            args = {}
+                        await self._emit(
+                            on_event,
+                            EventType.TOOL_CALL,
+                            data={
+                                "tool_call_id": tc.get("id"),
+                                "tool_name": fn.get("name"),
+                                "arguments": args,
+                            },
+                        )
+
+                    tool_results = await self._execute_tools_concurrently(tool_calls)
+
+                    for tc_id, tool_name, result in tool_results:
+                        if (
+                            self.tools.get(tool_name)
+                            and self.tools[tool_name].type == ToolType.RETRIEVAL
+                        ):
+                            memory.record_sources(tool_name, result)
+
+                        await self._emit(
+                            on_event,
+                            EventType.TOOL_RESULT,
+                            data={
+                                "tool_call_id": tc_id,
+                                "tool_name": tool_name,
+                                "result_preview": result[:200],
+                                "result_length": len(result),
+                                "success": not result.startswith("Error:"),
+                            },
+                        )
+
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc_id,
+                                "content": result,
+                            }
+                        )
+                        memory.add_message(
+                            "tool", result, tool_call_id=tc_id, name=tool_name
+                        )
+
+                    # Force synthesis on last iteration
+                    if iteration == self.config.max_iterations:
+                        log.warning("Max iterations reached — forcing synthesis")
+                        synthesis, _ = await self.llm.agentic_complete(
+                            messages=messages
+                        )
+                        final_answer = (
+                            synthesis
+                            or "Reached iteration limit without a conclusive answer."
+                        )
+                        await self._emit(
+                            on_event,
+                            EventType.LLM_RESPONSE,
+                            content=final_answer,
+                            data={
+                                "iteration": iteration + 1,
+                                "has_tool_calls": False,
+                                "forced_synthesis": True,
+                            },
+                        )
+
         except asyncio.TimeoutError:
-            logger.error("Agent loop timeout")
-            final_answer = "I apologize, but the request timed out. Please try a simpler query or try again later."
+            log.error("Agent timed out after %.1fs", self.config.timeout_seconds)
+            final_answer = "The request timed out. Please try a simpler query."
+            await self._emit(on_event, EventType.ERROR, content=final_answer)
 
         except Exception as e:
-            logger.error(f"Agent loop error: {e}")
-            final_answer = (
-                f"I encountered an error while processing your request: {str(e)}"
-            )
+            log.error("Agent error: %s", e, exc_info=True)
+            final_answer = f"An error occurred while processing your request: {e}"
+            await self._emit(on_event, EventType.ERROR, content=final_answer)
 
-        if self.config.verbose:
-            logger.info(f"Completed in {iteration} iterations")
+        final_answer = final_answer or "Unable to generate a response."
 
-        return final_answer or "I apologize, but I was unable to generate a response."
+        await self._emit(on_event, EventType.ANSWER, content=final_answer)
+        await self._emit(
+            on_event,
+            EventType.COMPLETE,
+            data={
+                "status": "error" if final_answer.startswith("An error") else "success",
+            },
+        )
 
-    def clear_memory(self):
-        self.memory.clear()
+        # Return sources from this run's memory
+        self._last_sources = memory.get_sources()
 
-    def get_conversation_history(self) -> List[Dict[str, Any]]:
-        return self.memory.get_messages()
+        log.info("Agent run complete.")
+        return final_answer
 
-    def get_sources(self) -> List[Dict[str, Any]]:
-        return self.memory.get_sources()
+    def get_sources(self) -> list[dict[str, Any]]:
+        """Return sources collected during the last run() call."""
+        return getattr(self, "_last_sources", [])
 
 
 class AgenticRAGSession:
+    """Async context manager for single-session use."""
+
     def __init__(self, agent: AgenticRAG):
         self.agent = agent
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> AgenticRAG:
         return self.agent
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self.agent.clear_memory()
+    async def __aexit__(self, *_):
+        pass  # no shared memory to clear
 
-    async def query(self, question: str) -> str:
-        return await self.agent.run(question)
+    async def query(
+        self,
+        question: str,
+        on_event: Optional[Callable[[AgentEvent], Any]] = None,
+    ) -> str:
+        return await self.agent.run(question, on_event=on_event)

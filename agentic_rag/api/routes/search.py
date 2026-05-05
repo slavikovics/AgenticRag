@@ -1,42 +1,44 @@
+"""search.py — direct collection search endpoint (bypass agent)."""
+
 import logging
 
 from fastapi import APIRouter, HTTPException
 
-from ..dependencies import get_qdrant_manager
+from ..dependencies import get_qdrant
 from ..models import SearchRequest, SearchResponse, SearchResult
 
-logger = logging.getLogger(__name__)
-
+log = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.post("/search", response_model=SearchResponse)
-async def search_knowledge_base(request: SearchRequest):
+async def search(request: SearchRequest):
+    """
+    Direct semantic search against a specific collection.
+    Bypasses the agent loop — useful for debugging retrieval quality.
+    """
     try:
-        retriever = await get_qdrant_manager()
-
-        results = await retriever.hybrid_search(
+        qdrant = await get_qdrant()
+        results = await qdrant.search(
             query=request.query,
+            collection=request.collection,
             limit=request.limit,
             alpha=request.alpha,
         )
-
-        formatted = [
-            SearchResult(
-                content=r["content"],
-                source=r["source"],
-                chunk_id=r["chunk_id"],
-                score=r["score"],
-            )
-            for r in results
-        ]
-
         return SearchResponse(
             query=request.query,
-            results=formatted,
-            count=len(formatted),
+            collection=request.collection,
+            results=[
+                SearchResult(
+                    content=r["content"],
+                    source=r["source"],
+                    title=r.get("title", ""),
+                    score=r["score"],
+                )
+                for r in results
+            ],
+            count=len(results),
         )
-
     except Exception as e:
-        logger.error(f"Search failed: {e}")
+        log.error("Search failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

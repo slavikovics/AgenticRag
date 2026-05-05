@@ -2,6 +2,9 @@
 qdrant-client>=1.7.0
 aiohttp>=3.9.0
 httpx>=0.24.0
+litellm
+tenacity
+tavily-python
 
 # Document processing
 pypdf>=3.18.0

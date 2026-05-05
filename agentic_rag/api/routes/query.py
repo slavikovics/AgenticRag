@@ -1,82 +1,113 @@
-import asyncio
+"""query.py — agentic query endpoint + WebSocket streaming."""
+
 import json
 import logging
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from ..dependencies import get_agent, get_llm_client
+from ..dependencies import get_agent
 from ..models import QueryRequest, QueryResponse
 
-logger = logging.getLogger(__name__)
-
+log = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.post("/query", response_model=QueryResponse)
-async def agentic_query(request: QueryRequest):
+async def query(request: QueryRequest):
+    """
+    Run the agentic RAG loop and return a final answer.
+    The agent selects which collection to search based on the query.
+    """
     try:
-        agent = await get_agent(model=request.model, temperature=request.temperature)
-        agent.config.max_iterations = request.max_iterations
-        answer = await agent.run(request.query)
+        agent = await get_agent()
+
+        # Per-request iteration override
+        if request.max_iterations is not None:
+            agent.config.max_iterations = request.max_iterations
+
+        # Optional collection hint injected into the query
+        query_text = request.query
+        if request.collection_hint:
+            query_text = (
+                f"[Search in collection: {request.collection_hint}] {request.query}"
+            )
+
+        answer = await agent.run(query_text)
         sources = agent.get_sources()
-        llm = await get_llm_client()
-        cost = getattr(llm, "total_cost", None)
+        agent.clear_memory()
+
         return QueryResponse(
             query=request.query,
             answer=answer,
             sources=sources,
-            iterations=agent.config.max_iterations,
-            cost_usd=cost,
         )
-    except asyncio.TimeoutError:
-        logger.error("Agent query timeout")
-        raise HTTPException(status_code=504, detail="Agent processing timeout")
+
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="Agent processing timed out")
     except Exception as e:
-        logger.error(f"Query failed: {e}")
+        log.error("Query failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.websocket("/ws/query")
 async def websocket_query(websocket: WebSocket):
+    """
+    WebSocket endpoint for streaming agent events to the client.
+
+    Client sends:  {"type": "query", "payload": {"query": "...", "collection_hint": "..."}}
+    Server emits:  AgentEvent JSON objects as they occur
+    """
     await websocket.accept()
+    log.info("WebSocket client connected")
+
     try:
         while True:
-            msg = await websocket.receive_text()
-            data = json.loads(msg)
-            if data.get("type") != "query":
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "content": "Invalid JSON"})
+                continue
+
+            if msg.get("type") != "query":
                 await websocket.send_json(
-                    {"type": "error", "content": "Invalid message type"}
+                    {"type": "error", "content": "Expected type=query"}
                 )
                 continue
-            query = data.get("payload", {}).get("query")
-            if not query:
+
+            payload = msg.get("payload", {})
+            query_text = payload.get("query", "").strip()
+            collection_hint = payload.get("collection_hint")
+
+            if not query_text:
                 await websocket.send_json({"type": "error", "content": "Missing query"})
                 continue
+
             agent = await get_agent()
 
-            async def handle_event(event):
-                event_type = (
-                    event.type.value if hasattr(event.type, "value") else event.type
-                )
+            if collection_hint:
+                query_text = f"[Search in collection: {collection_hint}] {query_text}"
+
+            async def on_event(event):
                 await websocket.send_json(
                     {
-                        "type": event_type,
+                        "type": event.type
+                        if isinstance(event.type, str)
+                        else event.type.value,
                         "content": event.content,
                         "data": event.data,
                         "timestamp": event.timestamp,
                     }
                 )
 
-            await websocket.send_json(
-                {"type": "thinking", "content": f"Processing: {query}"}
-            )
-            answer = await agent.run(query, on_event=handle_event)
-            await websocket.send_json({"type": "complete", "content": "Done"})
+            await agent.run(query_text, on_event=on_event)
+            agent.clear_memory()
+
     except WebSocketDisconnect:
-        logger.info("Client disconnected")
+        log.info("WebSocket client disconnected")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        log.error("WebSocket error: %s", e)
         try:
             await websocket.send_json({"type": "error", "content": str(e)})
-        except:
+        except Exception:
             pass

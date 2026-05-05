@@ -1,59 +1,56 @@
-from typing import Optional
+"""
+models.py — Pydantic request/response models.
+"""
 
-from pydantic import BaseModel
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
 
 
 class QueryRequest(BaseModel):
     query: str
-    model: Optional[str] = None
-    temperature: Optional[float] = 0.7
-    include_sources: Optional[bool] = True
-    max_iterations: Optional[int] = 10
+    max_iterations: Optional[int] = None  # overrides agent default if set
+    collection_hint: Optional[str] = None  # optional: hint the agent which collection
 
 
 class QueryResponse(BaseModel):
     query: str
     answer: str
-    sources: Optional[list[dict]] = None
-    iterations: int
-    cost_usd: Optional[float] = None
+    sources: list[dict[str, Any]] = []
+    iterations: int = 0
 
 
 class SearchRequest(BaseModel):
     query: str
-    limit: Optional[int] = 10
-    alpha: Optional[float] = 0.5
+    collection: str  # required: which university collection
+    limit: int = Field(default=5, ge=1, le=50)
+    alpha: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 class SearchResult(BaseModel):
     content: str
     source: str
-    chunk_id: int
+    title: str = ""
     score: float
 
 
 class SearchResponse(BaseModel):
     query: str
+    collection: str
     results: list[SearchResult]
     count: int
 
 
-class FileUploadResponse(BaseModel):
+class CollectionInfo(BaseModel):
+    name: str
+    points_count: int
     status: str
-    filename: str
-    documents_indexed: int
-    chunks: int
-
-
-class FilesUploadResponse(BaseModel):
-    status: str
-    files_processed: int
-    total_documents_indexed: int
-    details: list[dict]
+    vector_size: int
 
 
 class HealthResponse(BaseModel):
     status: str
-    qdrant: dict
-    llm_client: str = "openrouter"
-    version: str = "1.0.0"
+    collections: list[CollectionInfo] = []
+    llm_model: str
+    web_search_enabled: bool
+    version: str = "2.0.0"
