@@ -1,4 +1,4 @@
-"""query.py — agentic query endpoint + WebSocket streaming."""
+"""query.py — agentic query endpoint + persistent WebSocket streaming."""
 
 import json
 import logging
@@ -21,11 +21,9 @@ async def query(request: QueryRequest):
     try:
         agent = await get_agent()
 
-        # Per-request iteration override
         if request.max_iterations is not None:
             agent.config.max_iterations = request.max_iterations
 
-        # Optional collection hint injected into the query
         query_text = request.query
         if request.collection_hint:
             query_text = (
@@ -34,7 +32,6 @@ async def query(request: QueryRequest):
 
         answer = await agent.run(query_text)
         sources = agent.get_sources()
-        agent.clear_memory()
 
         return QueryResponse(
             query=request.query,
@@ -52,27 +49,42 @@ async def query(request: QueryRequest):
 @router.websocket("/ws/query")
 async def websocket_query(websocket: WebSocket):
     """
-    WebSocket endpoint for streaming agent events to the client.
+    Persistent WebSocket — stays open across multiple queries.
 
-    Client sends:  {"type": "query", "payload": {"query": "...", "collection_hint": "..."}}
-    Server emits:  AgentEvent JSON objects as they occur
+    Client sends:
+        {"type": "query", "payload": {"query": "...", "collection_hint": "..."}}
+
+    Server emits AgentEvent objects as they occur, then loops back waiting
+    for the next message. Connection only closes on client disconnect.
     """
     await websocket.accept()
     log.info("WebSocket client connected")
 
+    async def send(data: dict):
+        """Send JSON, ignore errors if client already disconnected."""
+        try:
+            await websocket.send_json(data)
+        except Exception:
+            pass
+
     try:
         while True:
-            raw = await websocket.receive_text()
+            # ── Receive next message ──────────────────────────────────────────
+            try:
+                raw = await websocket.receive_text()
+            except WebSocketDisconnect:
+                log.info("WebSocket client disconnected")
+                return
+
+            # ── Parse ─────────────────────────────────────────────────────────
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "content": "Invalid JSON"})
+                await send({"type": "error", "content": "Invalid JSON"})
                 continue
 
             if msg.get("type") != "query":
-                await websocket.send_json(
-                    {"type": "error", "content": "Expected type=query"}
-                )
+                await send({"type": "error", "content": "Expected type=query"})
                 continue
 
             payload = msg.get("payload", {})
@@ -80,34 +92,41 @@ async def websocket_query(websocket: WebSocket):
             collection_hint = payload.get("collection_hint")
 
             if not query_text:
-                await websocket.send_json({"type": "error", "content": "Missing query"})
+                await send({"type": "error", "content": "Missing query"})
                 continue
 
-            agent = await get_agent()
+            # ── Run agent ─────────────────────────────────────────────────────
+            try:
+                agent = await get_agent()
 
-            if collection_hint:
-                query_text = f"[Search in collection: {collection_hint}] {query_text}"
+                if collection_hint:
+                    query_text = (
+                        f"[Search in collection: {collection_hint}] {query_text}"
+                    )
 
-            async def on_event(event):
-                await websocket.send_json(
-                    {
-                        "type": event.type
-                        if isinstance(event.type, str)
-                        else event.type.value,
-                        "content": event.content,
-                        "data": event.data,
-                        "timestamp": event.timestamp,
-                    }
-                )
+                async def on_event(event):
+                    await send(
+                        {
+                            "type": event.type
+                            if isinstance(event.type, str)
+                            else event.type.value,
+                            "content": event.content,
+                            "data": event.data,
+                            "timestamp": event.timestamp,
+                        }
+                    )
 
-            await agent.run(query_text, on_event=on_event)
-            agent.clear_memory()
+                await agent.run(query_text, on_event=on_event)
+
+            except Exception as e:
+                # Agent error — send error event but keep WebSocket open
+                log.error("Agent error during WebSocket query: %s", e, exc_info=True)
+                await send({"type": "error", "content": str(e)})
+                # Continue loop — client can send another query
 
     except WebSocketDisconnect:
         log.info("WebSocket client disconnected")
     except Exception as e:
-        log.error("WebSocket error: %s", e)
-        try:
-            await websocket.send_json({"type": "error", "content": str(e)})
-        except Exception:
-            pass
+        # Unexpected error on the receive loop itself — log and close
+        log.error("WebSocket receive loop error: %s", e, exc_info=True)
+        await send({"type": "error", "content": f"Server error: {e}"})

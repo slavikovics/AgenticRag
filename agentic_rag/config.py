@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="qwen/qwen3-embedding-8b")
 
     # LLM (litellm model string, routed through OpenRouter)
-    llm_model: str = Field(default="qwen/qwen3.5-9b")
+    llm_model: str = Field(default="openrouter/qwen/qwen3.5-9b")
 
     # Tavily
     tavily_api_key: str = Field(default_factory=lambda: os.getenv("TAVILY_API_KEY", ""))

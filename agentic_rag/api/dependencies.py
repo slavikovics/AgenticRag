@@ -10,11 +10,11 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from agents import AgentConfig, AgenticRAG, LLMClient
-from agents.tools.web_search import make_web_search_tool
+from agentic_rag.agents import AgentConfig, AgenticRAG, LLMClient
+from agentic_rag.agents.tools.web_search import make_web_search_tool
 
-from .config import settings
-from .qdrant_client import QdrantSearchClient, Qwen3EmbedClient
+from ..config import settings
+from ..qdrant_client import QdrantSearchClient, Qwen3EmbedClient
 
 # Load collection descriptions from JSON — used to build the LLM system prompt
 _COLLECTIONS_FILE = Path(__file__).parent / "collections.json"

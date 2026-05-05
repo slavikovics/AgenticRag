@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import settings
+from ..config import settings
 from .dependencies import cleanup, get_agent, get_qdrant
 from .routes import health_router, query_router, search_router
 

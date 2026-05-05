@@ -126,9 +126,9 @@ class QdrantSearchClient:
         """
         try:
             vector = await self._embedder.embed_query(query)
-            hits = self._client.search(
+            result = self._client.query_points(
                 collection_name=collection,
-                query_vector=vector,
+                query=vector,
                 limit=limit,
                 with_payload=True,
                 score_threshold=score_threshold,
@@ -140,7 +140,7 @@ class QdrantSearchClient:
                     "score": hit.score,
                     "content": hit.payload.get("text", ""),
                 }
-                for hit in hits
+                for hit in result.points
             ]
         except Exception as e:
             log.error("Search failed (collection=%s): %s", collection, e)

@@ -4,7 +4,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from ..config import settings
+from ...config import settings
 from ..dependencies import get_agent, get_qdrant
 from ..models import CollectionInfo, HealthResponse
 

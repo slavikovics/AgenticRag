@@ -301,7 +301,7 @@ class AgenticRAG:
                             data={
                                 "tool_call_id": tc_id,
                                 "tool_name": tool_name,
-                                "result_preview": result[:200],
+                                "result_preview": result,
                                 "result_length": len(result),
                                 "success": not result.startswith("Error:"),
                             },
