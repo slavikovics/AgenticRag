@@ -3,11 +3,7 @@ tools/web_search.py — Tavily web search tool.
 
 Usage:
     from agents.tools.web_search import make_web_search_tool
-
     agent.register_tool(make_web_search_tool(api_key=os.getenv("TAVILY_API_KEY")))
-
-Requirements:
-    pip install tavily-python
 """
 
 import json

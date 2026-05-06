@@ -8,12 +8,15 @@ from dataclasses import dataclass
 @dataclass
 class AgentConfig:
     max_iterations: int = 10
-    timeout_seconds: float = 120.0
+    timeout_seconds: float = 120.0  # total budget for the entire run
+    tool_timeout_seconds: float = (
+        15.0  # per-tool timeout — prevents one hung tool killing the loop
+    )
     verbose: bool = True
     memory_size: int = 20
 
     # LLM generation params
-    temperature: float = 0.0  # 0 = deterministic, good for RAG
+    temperature: float = 0.0  # 0 = deterministic
     max_tokens: int = 2048
 
     # Retry config (tenacity)

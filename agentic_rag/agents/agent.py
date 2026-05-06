@@ -149,9 +149,13 @@ class AgenticRAG:
         try:
             if self.config.verbose:
                 log.info("Tool: %s  args: %s", tool_name, tool_input)
-            result = await self.tools[tool_name].handler(**tool_input)
+            async with asyncio.timeout(self.config.tool_timeout_seconds):
+                result = await self.tools[tool_name].handler(**tool_input)
             return str(result)
-        except Exception as e:
+        except asyncio.TimeoutError:
+            log.warning("Tool timed out (%s)", tool_name)
+            return f"Error: tool '{tool_name}' timed out — no results available"
+        except BaseException as e:
             log.error("Tool execution failed (%s): %s", tool_name, e)
             return f"Error executing tool '{tool_name}': {e}"
 
@@ -288,6 +292,12 @@ class AgenticRAG:
 
                     tool_results = await self._execute_tools_concurrently(tool_calls)
 
+                    # Only force synthesis when every tool hard-errored or timed out.
+                    # Empty results ("No documents found") are valid — the LLM handles them.
+                    all_tools_failed = bool(tool_results) and all(
+                        result.startswith("Error:") for _, _, result in tool_results
+                    )
+
                     for tc_id, tool_name, result in tool_results:
                         if (
                             self.tools.get(tool_name)
@@ -318,15 +328,19 @@ class AgenticRAG:
                             "tool", result, tool_call_id=tc_id, name=tool_name
                         )
 
-                    # Force synthesis on last iteration
-                    if iteration == self.config.max_iterations:
-                        log.warning("Max iterations reached — forcing synthesis")
+                    # Synthesise immediately if all tools returned nothing useful,
+                    # or if we hit the iteration limit — answer with what we have
+                    if all_tools_failed or iteration == self.config.max_iterations:
+                        if all_tools_failed:
+                            log.warning("All tools failed/empty — forcing synthesis")
+                        else:
+                            log.warning("Max iterations reached — forcing synthesis")
                         synthesis, _ = await self.llm.agentic_complete(
                             messages=messages
                         )
                         final_answer = (
                             synthesis
-                            or "Reached iteration limit without a conclusive answer."
+                            or "I was unable to find relevant information to answer your question."
                         )
                         await self._emit(
                             on_event,
@@ -336,12 +350,30 @@ class AgenticRAG:
                                 "iteration": iteration + 1,
                                 "has_tool_calls": False,
                                 "forced_synthesis": True,
+                                "all_tools_failed": all_tools_failed,
                             },
                         )
+                        break
 
         except asyncio.TimeoutError:
-            log.error("Agent timed out after %.1fs", self.config.timeout_seconds)
-            final_answer = "The request timed out. Please try a simpler query."
+            log.error(
+                "Agent timed out after %.1fs — attempting synthesis from partial context",
+                self.config.timeout_seconds,
+            )
+            try:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "The tools timed out. Please answer based on whatever context you have so far, or say you don't have enough information.",
+                    }
+                )
+                synthesis, _ = await self.llm.agentic_complete(messages=messages)
+                final_answer = (
+                    synthesis
+                    or "I ran out of time searching for an answer. Please try a more specific query."
+                )
+            except Exception:
+                final_answer = "I ran out of time searching for an answer. Please try a more specific query."
             await self._emit(on_event, EventType.ERROR, content=final_answer)
 
         except Exception as e:
